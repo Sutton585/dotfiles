@@ -1,25 +1,7 @@
 # dotfiles/zshrc
-DOTFILES_DIR="$(cd "$(dirname "${(%):-%N}")" && pwd)"
 
-# 1. Oh My Zsh prerequisites
-export ZSH="$HOME/.oh-my-zsh"
-zstyle ':omz:update' mode auto
-ZSH_THEME="dst"
-export EDITOR='vim'
-export VISUAL='vim'
-plugins=(
-  git
-  docker
-  kubectl
-  macos
-  brew
-  web-search
-  zsh-autosuggestions
-  zsh-syntax-highlighting
-)
-
-# dotfiles/zshrc
-DOTFILES_DIR="$(cd "$(dirname "${(%):-%N}")" && pwd)"
+# Resolve physical repo directory through symlinks
+DOTFILES_DIR="${${(%):-%N}:A:h}"
 
 # 1. Oh My Zsh prerequisites
 export ZSH="$HOME/.oh-my-zsh"
@@ -46,7 +28,6 @@ setopt PROMPT_SUBST
 autoload -U colors && colors
 
 # 4. Source all cross-platform (.sh) and Zsh-only (.zsh) modules
-# In Zsh, ** is built-in; only nullglob is needed
 setopt null_glob
 for f in "$DOTFILES_DIR/src"/**/*.sh "$DOTFILES_DIR/src"/**/*.zsh; do
   [ -r "$f" ] && . "$f"

@@ -18,16 +18,41 @@ plugins=(
   zsh-syntax-highlighting
 )
 
+# dotfiles/zshrc
+DOTFILES_DIR="$(cd "$(dirname "${(%):-%N}")" && pwd)"
+
+# 1. Oh My Zsh prerequisites
+export ZSH="$HOME/.oh-my-zsh"
+zstyle ':omz:update' mode auto
+ZSH_THEME="dst"
+export EDITOR='vim'
+export VISUAL='vim'
+plugins=(
+  git
+  docker
+  kubectl
+  macos
+  brew
+  web-search
+  zsh-autosuggestions
+  zsh-syntax-highlighting
+)
+
 # 2. Boot Oh My Zsh
 [ -f "$ZSH/oh-my-zsh.sh" ] && source "$ZSH/oh-my-zsh.sh"
 
-# 3. Source all cross-platform (.sh) and Zsh-only (.zsh) modules
-setopt globstar nullglob
+# 3. Ensure prompt substitution and colors are active
+setopt PROMPT_SUBST
+autoload -U colors && colors
+
+# 4. Source all cross-platform (.sh) and Zsh-only (.zsh) modules
+# In Zsh, ** is built-in; only nullglob is needed
+setopt null_glob
 for f in "$DOTFILES_DIR/src"/**/*.sh "$DOTFILES_DIR/src"/**/*.zsh; do
   [ -r "$f" ] && . "$f"
 done
 
-# Local version of .zshrc, unconnected to dotfiles repository
+# 5. Local machine-specific overrides
 [ -r "$HOME/.zshrc.local" ] && . "$HOME/.zshrc.local"
 
 unset f

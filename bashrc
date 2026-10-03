@@ -9,4 +9,7 @@ for f in "$DOTFILES_DIR/src"/**/*.sh "$DOTFILES_DIR/src"/**/*.bash; do
   [ -r "$f" ] && . "$f"
 done
 
+# Local version of .bashrc that isn't connected to the dotfiles repository
+[ -r "$HOME/.bashrc.local" ] && . "$HOME/.bashrc.local"
+
 unset f

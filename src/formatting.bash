@@ -87,8 +87,8 @@ else
 fi
 
 # load bash auto-completion and command-not-found
-. /usr/share/bash-completion/bash_completion
-. /usr/share/doc/pkgfile/command-not-found.bash
+[ -r /usr/share/bash-completion/bash_completion ] && . /usr/share/bash-completion/bash_completion
+[ -r /usr/share/doc/pkgfile/command-not-found.bash ] && . /usr/share/doc/pkgfile/command-not-found.bash
 
 # use shared agent to load ssh-keys; expects systemd to manage agent
 export SSH_AUTH_SOCK="$HOME/.ssh/socket"

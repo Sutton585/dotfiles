@@ -33,16 +33,16 @@ format = "in [$path]($style) "
 style = "bold cyan"
 
 [character]
-success_symbol = "[❯](purple)"
+success_symbol = "[❯](green)"
 error_symbol = "[❯](red)"
-vimcmd_symbol = "[❮](green)"
+vimcmd_symbol = "[❮](purple)"
 
 [git_branch]
 format = "[$branch]($style)"
 style = "bold pink"
 
 [git_status]
-format = "[[(*$conflicted$untracked$modified$staged$renamed$deleted)](218) ($ahead_behind$stashed)]($style)"
+format = "[[(*$conflicted$untracked$modified$staged$renamed$deleted)](pink) ($ahead_behind$stashed)]($style)"
 style = "bold red"
 conflicted = "​"
 untracked = "​"
@@ -58,14 +58,15 @@ style = "comment"
 
 [cmd_duration]
 min_time = 0
+show_milliseconds = true
 format = "[$duration]($style) "
-style = "bold yellow"
+style = "bold comment"
 
 [time]
 disabled = false
 time_format = "%R:%S"
 format = "[$time]($style)"
-style = "comment"
+style = "purple"
 
 [python]
 format = "[$virtualenv]($style) "

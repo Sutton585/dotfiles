@@ -15,8 +15,22 @@ $character"""
 
 right_format = """$cmd_duration$time"""
 
+add_newline = false
+
+[username]
+show_always = true
+format = "[$user]($style)@"
+style_user = "purple"
+
+[hostname]
+ssh_only = false
+format = "[$hostname]($style) "
+style = "green"
+ssh_symbol = ""
+
 [directory]
-style = "bold green"
+format = "in [$path]($style) "
+style = "bold cyan"
 
 [character]
 success_symbol = "[❯](purple)"

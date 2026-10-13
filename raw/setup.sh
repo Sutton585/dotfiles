@@ -13,22 +13,22 @@ CURRENT_IP=$(tailscale ip -4 2>/dev/null || true)
 if [ -z "$CURRENT_IP" ]; then
   CURRENT_HOSTNAME=$(cat /proc/sys/kernel/hostname)
   echo "Current hostname is: '$CURRENT_HOSTNAME'"
-  read -rp "Enter desired hostname for this VM (press Enter to keep '$CURRENT_HOSTNAME'): " CHOSEN_NAME
-  VM_NAME="${CHOSEN_NAME:-$CURRENT_HOSTNAME}"
+  read -rp "Enter desired hostname for this machine (press Enter to keep '$CURRENT_HOSTNAME'): " CHOSEN_NAME
+  HOST_NAME="${CHOSEN_NAME:-$CURRENT_HOSTNAME}"
 
-  echo "==> Applying hostname '$VM_NAME'..."
-  hostnamectl set-hostname "$VM_NAME"
+  echo "==> [SYSTEM:NETWORK] Applying hostname '$HOST_NAME'..."
+  hostnamectl set-hostname "$HOST_NAME"
 
   # Verify hostname change
   ACTIVE_NAME=$(cat /proc/sys/kernel/hostname)
-  if [ "$ACTIVE_NAME" != "$VM_NAME" ]; then
+  if [ "$ACTIVE_NAME" != "$HOST_NAME" ]; then
     echo "ERROR: Failed to set hostname. Current is still '$ACTIVE_NAME'."
     exit 1
   fi
-  echo "==> Hostname verified: $ACTIVE_NAME"
+  echo "==> [SYSTEM:NETWORK] Hostname verified: $ACTIVE_NAME"
 
-  echo "==> Requesting Tailscale login URL for '$VM_NAME'..."
-  tailscale up --reset --hostname="$VM_NAME" 2>&1
+  echo "==> [SYSTEM:NETWORK] Requesting Tailscale login URL for '$HOST_NAME'..."
+  tailscale up --reset --hostname="$HOST_NAME" 2>&1
 
   CURRENT_IP=$(tailscale ip -4 2>/dev/null || true)
   if [ -z "$CURRENT_IP" ]; then
@@ -40,7 +40,7 @@ if [ -z "$CURRENT_IP" ]; then
 ===================================================================
 Tailscale login successful!
 Assigned IP: $CURRENT_IP
-Node Name:   $VM_NAME
+Node Name:   $HOST_NAME
 
 NEXT STEPS:
 1. Disconnect this current SSH session.
@@ -56,7 +56,7 @@ fi
 # -------------------------------------------------------------------------
 TS_IPS=$(tailscale ip)
 
-# Field $3 is the destination IP on the VM
+# Field $3 is the destination IP on the host
 ACTIVE_SSH_IPS=$(ss -Htn state established '( sport = :22 )' | awk '{split($3, a, ":"); print a[1]}')
 
 IS_TS=0
@@ -70,19 +70,19 @@ done
 
 if [ "$IS_TS" -ne 1 ]; then
   echo "ERROR: Current SSH connection was NOT made over Tailscale."
-  echo "Active SSH destinations detected on VM: ${ACTIVE_SSH_IPS:-none}"
+  echo "Active SSH destinations detected on host: ${ACTIVE_SSH_IPS:-none}"
   echo "Tailscale IPs for this machine:"
   echo "$TS_IPS"
   echo "Please connect via: ssh admin@$CURRENT_IP, then re-run this script."
   exit 1
 fi
 
-echo "==> Verified: Connected via Tailscale ($SERVER_IP)."
+echo "==> [SYSTEM:NETWORK] Verified: Connected via Tailscale ($SERVER_IP)."
 
 # -------------------------------------------------------------------------
 # 1. Enforce SSH Keys Only (Disable Passwords)
 # -------------------------------------------------------------------------
-echo "==> Enforcing key-only SSH authentication..."
+echo "==> [SYSTEM:SECURITY] Enforcing key-only SSH authentication..."
 mkdir -p /etc/ssh/sshd_config.d
 cat << 'SSHEOF' > /etc/ssh/sshd_config.d/99-hardened.conf
 PasswordAuthentication no
@@ -94,7 +94,7 @@ systemctl reload sshd
 # -------------------------------------------------------------------------
 # 2. Lock Down Firewall & Terminate Stale Conntrack Sessions
 # -------------------------------------------------------------------------
-echo "==> Restricting incoming SSH strictly to tailscale0..."
+echo "==> [SYSTEM:SECURITY] Restricting incoming SSH strictly to tailscale0..."
 cat << 'NFTEOF' > /etc/nftables.conf
 flush ruleset
 
@@ -123,13 +123,20 @@ NFTEOF
 nft -f /etc/nftables.conf
 systemctl enable --now nftables
 
-# Ensure conntrack tools are available to sever existing non-Tailscale sessions
-if ! command -v conntrack &>/dev/null; then
-  pacman -Sy --noconfirm conntrack-tools >/dev/null 2>&1 || true
+# -------------------------------------------------------------------------
+# 3. Install Core System Tools & Shell Enhancements
+# -------------------------------------------------------------------------
+echo "==> [SYSTEM:PACKAGES] Installing system utilities & shell enhancements..."
+pacman -S --needed --noconfirm bash-completion pkgfile conntrack-tools >/dev/null 2>&1 || true
+
+if command -v pkgfile &>/dev/null; then
+  echo "==> [SYSTEM:PACKAGES] Initializing pkgfile database & timer..."
+  pkgfile -u >/dev/null 2>&1 || true
+  systemctl enable --now pkgfile-update.timer >/dev/null 2>&1 || true
 fi
 
 if command -v conntrack &>/dev/null; then
-  echo "==> Severing any non-Tailscale conntrack entries..."
+  echo "==> [SYSTEM:SECURITY] Severing any non-Tailscale conntrack entries..."
   # Kill any established conntrack flows on port 22 not destined for a Tailscale IP
   for tip in $TS_IPS; do
     conntrack -D -p tcp --dport 22 --dst-nat ! "$tip" >/dev/null 2>&1 || true
@@ -137,9 +144,9 @@ if command -v conntrack &>/dev/null; then
 fi
 
 # -------------------------------------------------------------------------
-# 3. In-Script Verification Tests
+# 4. In-Script Verification Tests
 # -------------------------------------------------------------------------
-echo "==> Running security checks..."
+echo "==> [SYSTEM:VERIFY] Running security checks..."
 if ! nft list chain inet filter input | grep -q 'iifname "tailscale0" tcp dport 22 accept'; then
   echo "WARNING: nftables rules do not appear to be loaded properly!"
 else
@@ -153,27 +160,39 @@ else
 fi
 
 # -------------------------------------------------------------------------
-# 4. Clone Dotfiles & Run Dotfiles Setup Script
+# 5. Clone Dotfiles & Run User Setup Script
 # -------------------------------------------------------------------------
-echo "==> Deploying dotfiles..."
+echo "==> [SYSTEM:USERS] Deploying user environments..."
 for u in admin dev; do
   h="/home/$u"
   target="$h/.dotfiles"
   if [ -d "$h" ]; then
+    echo "==> [USER:$u] Setting up environment in $target..."
     if [ ! -d "$target/.git" ]; then
-      sudo -u "$u" git clone "$REPO" "$target"
+      sudo -H -u "$u" git clone --depth 1 --single-branch --no-tags "$REPO" "$target"
     else
-      sudo -u "$u" git -C "$target" pull --ff-only || true
+      sudo -H -u "$u" git -C "$target" pull --ff-only || true
     fi
 
     if [ -f "$target/setup.sh" ]; then
-      echo "==> Running dotfiles setup for user '$u'..."
       chmod +x "$target/setup.sh"
-      # Run as root or the user depending on dotfiles setup needs
-      sudo -u "$u" bash "$target/setup.sh" || echo "Warning: Dotfiles setup for $u returned non-zero exit."
+      # Run in user's security context with HOME correctly set to /home/$u
+      sudo -H -u "$u" bash "$target/setup.sh" || echo "Warning: Dotfiles setup for $u returned non-zero exit."
     fi
   fi
 done
 
-echo "==> Setup complete! Machine is secured and configured."
-rm -- "$(readlink -f "$0")"
+# -------------------------------------------------------------------------
+# 6. Archive Provisioning Script for Audit Reference
+# -------------------------------------------------------------------------
+ARCHIVE_DIR="/var/log/provisioning"
+mkdir -p "$ARCHIVE_DIR"
+ARCHIVE_FILE="$ARCHIVE_DIR/host-setup-$(date +%Y%m%d_%H%M%S).sh"
+SCRIPT_PATH="$(readlink -f "$0")"
+
+echo "==> [SYSTEM:COMPLETE] Machine provisioning finished successfully."
+if [ "$SCRIPT_PATH" != "$ARCHIVE_FILE" ]; then
+  mv "$SCRIPT_PATH" "$ARCHIVE_FILE"
+  chmod 600 "$ARCHIVE_FILE"
+  echo "==> [SYSTEM:COMPLETE] Provisioning script archived to $ARCHIVE_FILE for audit reference."
+fi

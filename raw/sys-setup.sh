@@ -122,9 +122,9 @@ echo "==> [SYSTEM:PACKAGES] Installing system utilities & shell enhancements..."
 pacman -S --needed --noconfirm bash-completion pkgfile conntrack-tools >/dev/null 2>&1 || true
 
 if command -v pkgfile &>/dev/null; then
-  echo "==> [SYSTEM:PACKAGES] Initializing pkgfile database & timer..."
-  pkgfile -u >/dev/null 2>&1 || true
+  echo "==> [SYSTEM:PACKAGES] Enabling pkgfile update timer (indexing in background)..."
   systemctl enable --now pkgfile-update.timer >/dev/null 2>&1 || true
+  (pkgfile -u >/dev/null 2>&1 &) || true
 fi
 
 if command -v conntrack &>/dev/null; then

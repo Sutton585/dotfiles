@@ -97,4 +97,6 @@ fi
 
 # use shared agent to load ssh-keys; expects systemd to manage agent
 export SSH_AUTH_SOCK="$HOME/.ssh/socket"
-ssh-add -l &> /dev/null || ssh-add
+if [ -S "$SSH_AUTH_SOCK" ]; then
+  ssh-add -l &> /dev/null || ssh-add
+fi

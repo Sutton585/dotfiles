@@ -55,29 +55,21 @@ fi
 # STAGE 2: Verify SSH Arrived via Tailscale
 # -------------------------------------------------------------------------
 TS_IPS=$(tailscale ip)
+TS_IPV4=$(tailscale ip -4 2>/dev/null || true)
+[ -n "$TS_IPV4" ] || { echo "ERROR: Tailscale IPv4 address not found."; exit 1; }
 
-# Field $3 is the destination IP on the host
-ACTIVE_SSH_IPS=$(ss -Htn state established '( sport = :22 )' | awk '{split($3, a, ":"); print a[1]}')
-
-IS_TS=0
-for tip in $TS_IPS; do
-  if echo "$ACTIVE_SSH_IPS" | grep -qw "$tip"; then
-    IS_TS=1
-    SERVER_IP="$tip"
-    break
-  fi
-done
-
-if [ "$IS_TS" -ne 1 ]; then
-  echo "ERROR: Current SSH connection was NOT made over Tailscale."
-  echo "Active SSH destinations detected on host: ${ACTIVE_SSH_IPS:-none}"
+# Verify current SSH session connected directly to the host's Tailscale IP
+if ! ss -Htn state established '( sport = :22 )' | awk -v ip="$TS_IPV4" '
+   { split($3,l,":"); split($4,p,":"); if (l[1]==ip && p[1]!=ip) ok=1 }
+   END { exit !ok }'; then
+  echo "ERROR: Current SSH connection was NOT made over Tailscale ($TS_IPV4)."
   echo "Tailscale IPs for this machine:"
   echo "$TS_IPS"
-  echo "Please connect via: ssh admin@$CURRENT_IP, then re-run this script."
+  echo "Please connect via: ssh admin@$TS_IPV4, then re-run this script."
   exit 1
 fi
 
-echo "==> [SYSTEM:NETWORK] Verified: Connected via Tailscale ($SERVER_IP)."
+echo "==> [SYSTEM:NETWORK] Verified: Connected via Tailscale ($TS_IPV4)."
 
 # -------------------------------------------------------------------------
 # 1. Enforce SSH Keys Only (Disable Passwords)
@@ -119,7 +111,7 @@ table inet filter {
     }
 }
 NFTEOF
-
+nft -c -f /etc/nftables.conf
 nft -f /etc/nftables.conf
 systemctl enable --now nftables
 

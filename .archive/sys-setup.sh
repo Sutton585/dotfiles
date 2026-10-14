@@ -16,18 +16,19 @@ if [ -z "$CURRENT_IP" ]; then
   read -rp "Enter desired hostname for this machine (press Enter to keep '$CURRENT_HOSTNAME'): " CHOSEN_NAME
   HOST_NAME="${CHOSEN_NAME:-$CURRENT_HOSTNAME}"
 
-  echo "==> [SYSTEM:NETWORK] Applying hostname '$HOST_NAME'..."
+  echo "System Network:"
+  echo "  └─ Applying hostname '$HOST_NAME'..."
   hostnamectl set-hostname "$HOST_NAME"
 
   # Verify hostname change
   ACTIVE_NAME=$(cat /proc/sys/kernel/hostname)
   if [ "$ACTIVE_NAME" != "$HOST_NAME" ]; then
-    echo "ERROR: Failed to set hostname. Current is still '$ACTIVE_NAME'."
+    echo "  └─ ERROR: Failed to set hostname. Current is still '$ACTIVE_NAME'."
     exit 1
   fi
-  echo "==> [SYSTEM:NETWORK] Hostname verified: $ACTIVE_NAME"
+  echo "  └─ Hostname verified: $ACTIVE_NAME"
 
-  echo "==> [SYSTEM:NETWORK] Requesting Tailscale login URL for '$HOST_NAME'..."
+  echo "  └─ Requesting Tailscale login URL for '$HOST_NAME'..."
   tailscale up --reset --hostname="$HOST_NAME" 2>&1
 
   CURRENT_IP=$(tailscale ip -4 2>/dev/null || true)
@@ -69,12 +70,16 @@ if ! ss -Htn state established '( sport = :22 )' | awk -v ip="$TS_IPV4" '
   exit 1
 fi
 
-echo "==> [SYSTEM:NETWORK] Verified: Connected via Tailscale ($TS_IPV4)."
+echo "System Network:"
+echo "  └─ Hostname: $(cat /proc/sys/kernel/hostname) (verified)"
+echo "  └─ Tailscale: $TS_IPV4 (verified)"
 
 # -------------------------------------------------------------------------
 # 1. Enforce SSH Keys Only (Disable Passwords)
 # -------------------------------------------------------------------------
-echo "==> [SYSTEM:SECURITY] Enforcing key-only SSH authentication..."
+echo ""
+echo "System Security:"
+echo "  └─ SSH: enforcing key-only authentication (passwords disabled)"
 mkdir -p /etc/ssh/sshd_config.d
 cat << 'SSHEOF' > /etc/ssh/sshd_config.d/99-hardened.conf
 PasswordAuthentication no
@@ -86,7 +91,7 @@ systemctl reload sshd
 # -------------------------------------------------------------------------
 # 2. Lock Down Firewall & Terminate Stale Conntrack Sessions
 # -------------------------------------------------------------------------
-echo "==> [SYSTEM:SECURITY] Restricting incoming SSH strictly to tailscale0..."
+echo "  └─ Firewall: restricting incoming SSH strictly to tailscale0"
 cat << 'NFTEOF' > /etc/nftables.conf
 flush ruleset
 
@@ -118,17 +123,19 @@ systemctl enable --now nftables
 # -------------------------------------------------------------------------
 # 3. Install Core System Tools & Shell Enhancements
 # -------------------------------------------------------------------------
-echo "==> [SYSTEM:PACKAGES] Installing system utilities & shell enhancements..."
+echo ""
+echo "System Packages:"
+echo "  └─ Core utilities: installing bash-completion, pkgfile, conntrack-tools"
 pacman -S --needed --noconfirm bash-completion pkgfile conntrack-tools >/dev/null 2>&1 || true
 
 if command -v pkgfile &>/dev/null; then
-  echo "==> [SYSTEM:PACKAGES] Enabling pkgfile update timer (indexing in background)..."
+  echo "  └─ pkgfile: update timer enabled (indexing in background)"
   systemctl enable --now pkgfile-update.timer >/dev/null 2>&1 || true
   (pkgfile -u >/dev/null 2>&1 &) || true
 fi
 
 if command -v conntrack &>/dev/null; then
-  echo "==> [SYSTEM:SECURITY] Severing any non-Tailscale conntrack entries..."
+  echo "  └─ conntrack: severing non-Tailscale SSH sessions"
   # Kill any established conntrack flows on port 22 not destined for a Tailscale IP
   for tip in $TS_IPS; do
     conntrack -D -p tcp --dport 22 --dst-nat ! "$tip" >/dev/null 2>&1 || true
@@ -138,38 +145,40 @@ fi
 # -------------------------------------------------------------------------
 # 4. In-Script Verification Tests
 # -------------------------------------------------------------------------
-echo "==> [SYSTEM:VERIFY] Running security checks..."
+echo ""
+echo "Security Verification:"
 if ! nft list chain inet filter input | grep -q 'iifname "tailscale0" tcp dport 22 accept'; then
-  echo "WARNING: nftables rules do not appear to be loaded properly!"
+  echo "  └─ nftables: WARNING - rules do not appear to be loaded properly!"
 else
-  echo "  [PASS] nftables is enforcing SSH restriction to tailscale0."
+  echo "  └─ nftables: port 22 restriction active [PASS]"
 fi
 
 if ! sshd -T | grep -iq "passwordauthentication no"; then
-  echo "WARNING: Password authentication is still enabled in sshd!"
+  echo "  └─ sshd: WARNING - password authentication is still enabled!"
 else
-  echo "  [PASS] Password authentication is disabled in sshd."
+  echo "  └─ sshd: password authentication disabled [PASS]"
 fi
 
 # -------------------------------------------------------------------------
 # 5. Clone Dotfiles & Run User Setup Script
 # -------------------------------------------------------------------------
-echo "==> [SYSTEM:USERS] Deploying user environments..."
+echo ""
+echo "Deploying Environments:"
 for u in admin dev; do
   h="/home/$u"
   target="$h/.dotfiles"
   if [ -d "$h" ]; then
-    echo "==> [USER:$u] Setting up environment in $target..."
+    echo "  └─ User: $u"
     if [ ! -d "$target/.git" ]; then
-      sudo -H -u "$u" git clone --depth 1 --single-branch --no-tags "$REPO" "$target"
+      sudo -H -u "$u" git clone --quiet --depth 1 --single-branch --no-tags "$REPO" "$target" >/dev/null 2>&1
     else
-      sudo -H -u "$u" git -C "$target" pull --ff-only || true
+      sudo -H -u "$u" git -C "$target" pull --quiet --ff-only >/dev/null 2>&1 || true
     fi
 
     if [ -f "$target/setup.sh" ]; then
       chmod +x "$target/setup.sh"
-      # Run in user's security context with HOME correctly set to /home/$u
-      sudo -H -u "$u" bash "$target/setup.sh" || echo "Warning: Dotfiles setup for $u returned non-zero exit."
+      # Run in user's security context with HOME correctly set to /home/$u and pass LOG_PREFIX
+      sudo -H -u "$u" env LOG_PREFIX="    " bash "$target/setup.sh" || echo "    └─ Warning: Dotfiles setup for $u returned non-zero exit."
     fi
   fi
 done
@@ -182,9 +191,10 @@ mkdir -p "$ARCHIVE_DIR"
 ARCHIVE_FILE="$ARCHIVE_DIR/host-setup-$(date +%Y%m%d_%H%M%S).sh"
 SCRIPT_PATH="$(readlink -f "$0")"
 
-echo "==> [SYSTEM:COMPLETE] Machine provisioning finished successfully."
+echo ""
+echo "Provisioning Complete:"
 if [ "$SCRIPT_PATH" != "$ARCHIVE_FILE" ]; then
   mv "$SCRIPT_PATH" "$ARCHIVE_FILE"
   chmod 600 "$ARCHIVE_FILE"
-  echo "==> [SYSTEM:COMPLETE] Provisioning script archived to $ARCHIVE_FILE for audit reference."
+  echo "  └─ Archived provisioning script to $ARCHIVE_FILE"
 fi

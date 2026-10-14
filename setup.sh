@@ -27,6 +27,12 @@ if ! command -v fzf >/dev/null 2>&1; then
   ln -sf "$HOME/.fzf/bin/fzf" "$HOME/.local/bin/fzf"
 fi
 
+# Clean up legacy Starship symlink (now loaded via STARSHIP_CONFIG in dotfiles.sh)
+if [ -L "$HOME/.config/starship.toml" ]; then
+  echo "==> Removing legacy starship.toml symlink (using STARSHIP_CONFIG env var)..."
+  rm -f "$HOME/.config/starship.toml"
+fi
+
 # --- 2. Install Zsh plugins (if zsh is available) ---
 if command -v zsh >/dev/null 2>&1; then
   ZSH_PLUGIN_DIR="$HOME/.local/share/zsh-plugins"
@@ -41,16 +47,14 @@ if command -v zsh >/dev/null 2>&1; then
     echo "==> Installing zsh-syntax-highlighting..."
     git clone --depth 1 --single-branch --no-tags https://github.com/zsh-users/zsh-syntax-highlighting.git "$ZSH_PLUGIN_DIR/zsh-syntax-highlighting"
   fi
+
+  if [ ! -d "$ZSH_PLUGIN_DIR/zsh-completions" ]; then
+    echo "==> Installing zsh-completions..."
+    git clone --depth 1 --single-branch --no-tags https://github.com/zsh-users/zsh-completions.git "$ZSH_PLUGIN_DIR/zsh-completions"
+  fi
 fi
 
-# --- 3. Link Starship configuration ---
-if [ -f "$DOTFILES_DIR/src/starship.toml" ]; then
-  mkdir -p "$HOME/.config"
-  ln -sf "$DOTFILES_DIR/src/starship.toml" "$HOME/.config/starship.toml"
-  echo "==> Linked starship.toml -> $HOME/.config/starship.toml"
-fi
-
-# --- 4. Idempotently inject source line into RC files ---
+# --- 3. Idempotently inject source line into RC files ---
 inject_source() {
   local rc_file="$1"
   touch "$rc_file"

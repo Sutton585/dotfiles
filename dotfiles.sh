@@ -15,6 +15,7 @@ fi
 [[ ":$PATH:" != *":$HOME/.local/bin:"* ]] && export PATH="$HOME/.local/bin:$PATH"
 
 # 2. Initialize CLI tools (Starship, Zoxide, FZF)
+[ -f "$DOTFILES_DIR/src/starship.toml" ] && export STARSHIP_CONFIG="$DOTFILES_DIR/src/starship.toml"
 command -v starship >/dev/null && eval "$(starship init "$CURRENT_SHELL")"
 command -v zoxide   >/dev/null && eval "$(zoxide init "$CURRENT_SHELL")"
 

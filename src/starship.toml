@@ -30,7 +30,7 @@ ssh_symbol = ""
 
 [directory]
 format = "in [$path]($style) "
-style = "bold cyan"
+style = "bold orange"
 
 [character]
 success_symbol = "[❯](green)"
@@ -39,17 +39,17 @@ vimcmd_symbol = "[❮](purple)"
 
 [git_branch]
 format = "[$branch]($style)"
-style = "bold pink"
+style = "bold comment"
 
 [git_status]
-format = "[[(*$conflicted$untracked$modified$staged$renamed$deleted)](pink) ($ahead_behind$stashed)]($style)"
-style = "bold red"
-conflicted = "​"
-untracked = "​"
-modified = "​"
-staged = "​"
-renamed = "​"
-deleted = "​"
+format = "[[(*$conflicted$untracked$modified$staged$renamed$deleted)](red) ($ahead_behind$stashed)]($style)"
+style = "orange"
+conflicted = ""
+untracked = ""
+modified = " "
+staged = ""
+renamed = ""
+deleted = ""
 stashed = "≡"
 
 [git_state]
@@ -60,13 +60,13 @@ style = "comment"
 min_time = 0
 show_milliseconds = true
 format = "[$duration]($style) "
-style = "bold comment"
+style = "comment"
 
 [time]
 disabled = false
 time_format = "%R:%S"
 format = "[$time]($style)"
-style = "purple"
+style = "bold comment"
 
 [python]
 format = "[$virtualenv]($style) "

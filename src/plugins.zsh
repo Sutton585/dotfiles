@@ -1,9 +1,21 @@
-# src/plugins.zsh - Sourced automatically only in Zsh via dotfiles.sh
+# src/plugins.zsh - Sourced automatically in Zsh via dotfiles.sh
 
-# 1. zsh-autosuggestions
-[ -r "$HOME/.local/share/zsh-plugins/zsh-autosuggestions/zsh-autosuggestions.zsh" ] && \
-  source "$HOME/.local/share/zsh-plugins/zsh-autosuggestions/zsh-autosuggestions.zsh"
+for _dir in \
+  "${HOMEBREW_PREFIX:-/opt/homebrew}/share" \
+  "/usr/local/share" \
+  "$HOME/.local/share/zsh-plugins"; do
 
-# 2. zsh-syntax-highlighting (must always be loaded last)
-[ -r "$HOME/.local/share/zsh-plugins/zsh-syntax-highlighting/zsh-syntax-highlighting.zsh" ] && \
-  source "$HOME/.local/share/zsh-plugins/zsh-syntax-highlighting/zsh-syntax-highlighting.zsh"
+  # 1. Autosuggestions
+  [ -z "$_as_loaded" ] && [ -r "$_dir/zsh-autosuggestions/zsh-autosuggestions.zsh" ] && {
+    source "$_dir/zsh-autosuggestions/zsh-autosuggestions.zsh"
+    _as_loaded=1
+  }
+
+  # 2. Syntax Highlighting (must be loaded last)
+  [ -z "$_sh_loaded" ] && [ -r "$_dir/zsh-syntax-highlighting/zsh-syntax-highlighting.zsh" ] && {
+    source "$_dir/zsh-syntax-highlighting/zsh-syntax-highlighting.zsh"
+    _sh_loaded=1
+  }
+done
+
+unset _dir _as_loaded _sh_loaded

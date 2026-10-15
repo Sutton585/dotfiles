@@ -3,11 +3,12 @@
 # add aliases with optimized settings
 alias ls='ls -vhFA --color=auto'
 alias grep='grep --color=auto'
-alias ..='cd ..'
-alias ...='cd ../..'
+alias fgrep='fgrep --color=auto'
+alias egrep='egrep --color=auto'
 alias sshfs='sshfs -o cache=yes,compression=yes,kernel_cache'
 alias jwine='LANG=ja_JP.UTF-8 wine'
 alias puz='for F in *.zip; do mkdir "${F%.*}" && unzip -d "${F%.*}" "${F}" && rm "${F}"; done'
+
 
 # alias for discord wayland, since it ignores configs
 alias discord='discord --enable-features=UseOzonePlatform --ozone-platform=wayland'
@@ -23,6 +24,30 @@ man() {
     LESS_TERMCAP_us=$'\e[1;32m' \
       man "$@"
 }
+
+# load bash auto-completion and command-not-found
+[ -r /usr/share/bash-completion/bash_completion ] && . /usr/share/bash-completion/bash_completion
+[ -r /usr/share/doc/pkgfile/command-not-found.bash ] && . /usr/share/doc/pkgfile/command-not-found.bash
+
+# use shared agent to load ssh-keys; expects systemd to manage agent
+export SSH_AUTH_SOCK="$HOME/.ssh/socket"
+if [ -S "$SSH_AUTH_SOCK" ]; then
+  ssh-add -l &> /dev/null || ssh-add
+fi
+
+# history settings
+HISTCONTROL=ignoreboth
+shopt -s histappend
+HISTSIZE=10000
+HISTFILESIZE=2000
+
+# terminal resizing
+shopt -s checkwinsize
+
+# recursive file matching with **
+shopt -s globstar 
+
+
 
 # ---------------------------------------------------------
 # Fallback prompt enhancements (active only when Starship is not installed)
@@ -89,14 +114,4 @@ if ! command -v starship >/dev/null 2>&1; then
   else
     PROMPT_COMMAND="$PROMPT_COMMAND; timer_stop"
   fi
-fi
-
-# load bash auto-completion and command-not-found
-[ -r /usr/share/bash-completion/bash_completion ] && . /usr/share/bash-completion/bash_completion
-[ -r /usr/share/doc/pkgfile/command-not-found.bash ] && . /usr/share/doc/pkgfile/command-not-found.bash
-
-# use shared agent to load ssh-keys; expects systemd to manage agent
-export SSH_AUTH_SOCK="$HOME/.ssh/socket"
-if [ -S "$SSH_AUTH_SOCK" ]; then
-  ssh-add -l &> /dev/null || ssh-add
 fi

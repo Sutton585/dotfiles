@@ -1,4 +1,6 @@
 # src/plugins.zsh - Sourced automatically in Zsh via dotfiles.sh
+#alias ls='ls -vhFA --color=auto'
+alias ls='ls -vhFAG'
 
 for _dir in \
   "${HOMEBREW_PREFIX:-/opt/homebrew}/share" \

@@ -25,18 +25,29 @@ man() {
 }
 
 # colors for enhanced prompt
+# c_bold="\033[1m"
+# c_red="\033[31m"
+# c_green="\033[32m"
+# c_blue="\033[34m"
+# c_purple="\033[35m"
+# c_cyan="\033[36m"
+# c_sgr0="\033[0m"
+
+# Dracula ANSI Color Palette
 c_bold="\033[1m"
-c_red="\033[31m"
-c_green="\033[32m"
-c_blue="\033[34m"
-c_purple="\033[35m"
-c_cyan="\033[36m"
-c_sgr0="\033[0m"
+c_red="\033[38;2;255;85;85m"       # Dracula Red (#ff5555)
+c_green="\033[38;2;80;250;123m"    # Dracula Green (#50fa7b)
+c_blue="\033[38;2;189;147;249m"    # Dracula Purple/Blue (#bd93f9)
+c_purple="\033[38;2;255;121;198m"  # Dracula Pink/Purple (#ff79c6)
+c_cyan="\033[38;2;139;233;253m"    # Dracula Cyan (#8be9fd)
+c_comment="\033[38;2;98;114;164m"  # Dracula Comment Gray (#6272a4)
+c_orange="\033[38;2;255;184;108m"  # Dracula Orange (#ffb86c)
 
 # promptify is an updated prompt enhancement enabled by default
 promptify() {
   local prompt_string
-  prompt_string="${c_blue}${0} ($(date +'%R:%S.%3N'):${timer_show}s) ${c_purple}$(whoami)${c_sgr0}@${c_green}$(hostname) ${c_bold}${c_blue}$(dirs)${c_sgr0}"
+  #prompt_string="${c_blue}${0} ($(date +'%R:%S.%3N'):${timer_show}s) ${c_purple}$(whoami)${c_sgr0}@${c_green}$(hostname) ${c_bold}${c_blue}$(dirs)${c_sgr0}"
+  prompt_string="${c_comment}${0} ($(date +'%R:%S.%3N'):${timer_show}s)${c_sgr0} ${c_purple}$(whoami)${c_sgr0}@${c_green}$(uname -n)${c_sgr0} ${c_bold}${c_cyan}$(dirs)${c_sgr0}"
   if git rev-parse --git-dir &> /dev/null; then
     git_branch=$(git branch 2> /dev/null | sed -n 's/^\*[ ]*//p')
     git_stats=$(git status --porcelain --untracked-files=all 2> /dev/null)

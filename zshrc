@@ -6,7 +6,7 @@ DOTFILES_DIR="${${(%):-%N}:A:h}"
 # 1. Oh My Zsh prerequisites
 export ZSH="$HOME/.oh-my-zsh"
 zstyle ':omz:update' mode auto
-ZSH_THEME="dst"
+#ZSH_THEME="dst"
 export EDITOR='vim'
 export VISUAL='vim'
 plugins=(

@@ -1,0 +1,89 @@
+"$schema" = 'https://starship.rs/config-schema.json'
+
+palette = "dracula"
+
+format = """
+$username\
+$hostname\
+$directory\
+$git_branch\
+$git_state\
+$git_status\
+$line_break\
+$python\
+$character"""
+
+right_format = """$cmd_duration$time"""
+
+add_newline = false
+
+[username]
+show_always = true
+format = "[$user]($style)@"
+style_user = "purple"
+
+[hostname]
+ssh_only = false
+format = "[$hostname]($style) "
+style = "green"
+ssh_symbol = ""
+
+[directory]
+format = "in [$path]($style) "
+style = "bold orange"
+
+[character]
+success_symbol = "[❯](green)"
+error_symbol = "[❯](red)"
+vimcmd_symbol = "[❮](purple)"
+
+[git_branch]
+format = "[$branch]($style)"
+style = "bold comment"
+
+[git_status]
+format = "[[(*$conflicted$untracked$modified$staged$renamed$deleted)](red) ($ahead_behind$stashed)]($style)"
+style = "orange"
+conflicted = ""
+untracked = ""
+modified = " "
+staged = ""
+renamed = ""
+deleted = ""
+stashed = "≡"
+
+[git_state]
+format = '\([$state( $progress_current/$progress_total)]($style)\) '
+style = "comment"
+
+[cmd_duration]
+min_time = 0
+show_milliseconds = true
+format = "[$duration]($style) "
+style = "comment"
+
+[time]
+disabled = false
+time_format = "%R:%S"
+format = "[$time]($style)"
+style = "bold comment"
+
+[python]
+format = "[$virtualenv]($style) "
+style = "comment"
+detect_extensions = []
+detect_files = []
+
+# Define Dracula color palette
+[palettes.dracula]
+background = "#282a36"
+current_line = "#44475a"
+foreground = "#f8f8f2"
+comment = "#6272a4"
+cyan = "#8be9fd"
+green = "#50fa7b"
+orange = "#ffb86c"
+pink = "#ff79c6"
+purple = "#bd93f9"
+red = "#ff5555"
+yellow = "#f1fa8c"

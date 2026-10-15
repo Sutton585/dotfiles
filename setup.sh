@@ -2,69 +2,115 @@
 set -e
 
 DOTFILES_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+SOURCE_LINE="[ -f \"$DOTFILES_DIR/dotfiles.sh\" ] && . \"$DOTFILES_DIR/dotfiles.sh\""
 
-link_rc_file() {
-  local src="$1"
-  local target="$2"
-  local local_rc="$3"
+# Universal prefix resolver (defaults to empty string for standalone runs)
+PREFIX="${LOG_PREFIX:-}"
 
-  if [ -L "$target" ]; then
-    echo "Symlink already exists for $target"
-    ln -sf "$src" "$target"
-    return 0
+log() {
+  local extra=""
+  if [[ "$1" =~ ^[0-9]+$ ]]; then
+    extra=$(printf '%*s' "$(( $1 * 2 ))" '')
+    shift
   fi
-
-  if [ -f "$target" ]; then
-    if [ ! -f "$local_rc" ]; then
-      echo "Migrating existing $target -> $local_rc"
-      mv "$target" "$local_rc"
-    else
-      echo "Warning: $local_rc already exists. Backing up $target to ${target}.bak"
-      mv "$target" "${target}.bak"
-    fi
-  fi
-
-  ln -sf "$src" "$target"
-  echo "Linked $target -> $src"
+  printf "%s%s%s\n" "$PREFIX" "$extra" "$*"
 }
 
-# ---------------------------------------------------------
-# 1. macOS / Zsh Provisioning (Exclusively for Mac)
-# ---------------------------------------------------------
-if [[ "$OSTYPE" == "darwin"* ]]; then
-  echo "==> Setting up macOS / Zsh environment..."
+log "dotfiles initialization:"
 
-  # Install Oh My Zsh if missing
-  if [ ! -d "$HOME/.oh-my-zsh" ]; then
-    echo "Installing Oh My Zsh..."
-    RUNZSH=no CHSH=no sh -c "$(curl -fsSL https://raw.githubusercontent.com/ohmyzsh/ohmyzsh/master/tools/install.sh)" "" --unattended
+# --- 1. Install CLI tools if missing ---
+mkdir -p "$HOME/.local/bin"
+export PATH="$HOME/.local/bin:$PATH"
 
-    if [ -f "$HOME/.zshrc.pre-oh-my-zsh" ] && [ ! -f "$HOME/.zshrc.local" ]; then
-      echo "Recovering pre-OMZ config -> $HOME/.zshrc.local"
-      mv "$HOME/.zshrc.pre-oh-my-zsh" "$HOME/.zshrc.local"
-    fi
-
-    rm -f "$HOME/.zshrc"
-  fi
-
-  # Clone external plugins if missing
-  ZSH_CUSTOM="${ZSH_CUSTOM:-$HOME/.oh-my-zsh/custom}"
-  [ -d "$ZSH_CUSTOM/plugins/zsh-autosuggestions" ] || \
-    git clone --depth=1 https://github.com/zsh-users/zsh-autosuggestions "$ZSH_CUSTOM/plugins/zsh-autosuggestions"
-  [ -d "$ZSH_CUSTOM/plugins/zsh-syntax-highlighting" ] || \
-    git clone --depth=1 https://github.com/zsh-users/zsh-syntax-highlighting.git "$ZSH_CUSTOM/plugins/zsh-syntax-highlighting"
-
-  # Link repo zshrc -> ~/.zshrc
-  link_rc_file "$DOTFILES_DIR/zshrc" "$HOME/.zshrc" "$HOME/.zshrc.local"
-
-# ---------------------------------------------------------
-# 2. Linux / Bash Provisioning (Exclusively for Linux)
-# ---------------------------------------------------------
-elif [[ "$OSTYPE" == "linux"* ]]; then
-  echo "==> Setting up Linux / Bash environment..."
-
-  # Link repo bashrc -> ~/.bashrc
-  link_rc_file "$DOTFILES_DIR/bashrc" "$HOME/.bashrc" "$HOME/.bashrc.local"
+if ! command -v starship >/dev/null 2>&1; then
+  curl -sS https://starship.rs/install.sh | sh -s -- -y -b "$HOME/.local/bin" >/dev/null 2>&1
+  log 1 "└─ starship: installed to ~/.local/bin"
+else
+  log 1 "└─ starship: already present (cached)"
 fi
 
-echo "==> Setup complete! Reload your shell to apply."
+if ! command -v zoxide >/dev/null 2>&1; then
+  curl -sSfL https://raw.githubusercontent.com/ajeetdsouza/zoxide/main/install.sh | sh >/dev/null 2>&1
+  log 1 "└─ zoxide: installed to ~/.local/bin"
+else
+  log 1 "└─ zoxide: already present (cached)"
+fi
+
+if ! command -v fzf >/dev/null 2>&1; then
+  if [ ! -d "$HOME/.fzf" ]; then
+    git clone --quiet --depth 1 --single-branch --no-tags https://github.com/junegunn/fzf.git "$HOME/.fzf" >/dev/null 2>&1
+  fi
+  "$HOME/.fzf/install" --bin --no-bash --no-zsh --no-fish >/dev/null 2>&1
+  ln -sf "$HOME/.fzf/bin/fzf" "$HOME/.local/bin/fzf"
+  log 1 "└─ fzf: installed to ~/.local/bin"
+else
+  log 1 "└─ fzf: already present (cached)"
+fi
+
+# Clean up legacy Starship symlink (now loaded via STARSHIP_CONFIG in dotfiles.sh)
+if [ -L "$HOME/.config/starship.toml" ]; then
+  rm -f "$HOME/.config/starship.toml"
+  log 1 "└─ legacy cleanup: removed obsolete ~/.config/starship.toml symlink"
+fi
+
+# --- 2. Install Zsh plugins (if zsh is available) ---
+if command -v zsh >/dev/null 2>&1; then
+  ZSH_PLUGIN_DIR="$HOME/.local/share/zsh-plugins"
+  mkdir -p "$ZSH_PLUGIN_DIR"
+  plugins_installed=()
+
+  if [ ! -d "$ZSH_PLUGIN_DIR/zsh-autosuggestions" ]; then
+    git clone --quiet --depth 1 --single-branch --no-tags https://github.com/zsh-users/zsh-autosuggestions.git "$ZSH_PLUGIN_DIR/zsh-autosuggestions" >/dev/null 2>&1
+    plugins_installed+=("autosuggestions")
+  fi
+
+  if [ ! -d "$ZSH_PLUGIN_DIR/zsh-syntax-highlighting" ]; then
+    git clone --quiet --depth 1 --single-branch --no-tags https://github.com/zsh-users/zsh-syntax-highlighting.git "$ZSH_PLUGIN_DIR/zsh-syntax-highlighting" >/dev/null 2>&1
+    plugins_installed+=("syntax-highlighting")
+  fi
+
+  if [ ! -d "$ZSH_PLUGIN_DIR/zsh-completions" ]; then
+    git clone --quiet --depth 1 --single-branch --no-tags https://github.com/zsh-users/zsh-completions.git "$ZSH_PLUGIN_DIR/zsh-completions" >/dev/null 2>&1
+    plugins_installed+=("completions")
+  fi
+
+  if [ ${#plugins_installed[@]} -gt 0 ]; then
+    log 1 "└─ zsh plugins: installed ${plugins_installed[*]} [ready]"
+  else
+    log 1 "└─ zsh plugins: autosuggestions, syntax-highlighting, completions [cached]"
+  fi
+else
+  log 1 "└─ zsh plugins: skipped (zsh not installed)"
+fi
+
+# --- 3. Idempotently inject source line into RC files ---
+inject_source() {
+  local rc_file="$1"
+  local name
+  name="$(basename "$rc_file")"
+  touch "$rc_file"
+  if ! grep -Fq "$DOTFILES_DIR/dotfiles.sh" "$rc_file"; then
+    echo -e "\n# Load dotfiles\n$SOURCE_LINE" >> "$rc_file"
+    log 1 "└─ shell rc: injected dotfiles source into ~/$name"
+  else
+    log 1 "└─ shell rc: source line already present in ~/$name"
+  fi
+}
+
+# Inject into active user shells
+if [ -f "$HOME/.zshrc" ] || [[ "$SHELL" == *"zsh"* ]]; then
+  inject_source "$HOME/.zshrc"
+fi
+
+if [ -f "$HOME/.bashrc" ] || [[ "$SHELL" == *"bash"* ]]; then
+  inject_source "$HOME/.bashrc"
+fi
+
+# Reload recommendation
+reload_cmd="exec zsh"
+if [[ "$SHELL" == *"bash"* ]] && [ ! -f "$HOME/.zshrc" ]; then
+  reload_cmd="source ~/.bashrc"
+fi
+
+log ""
+log "Setup complete: reload shell with '$reload_cmd'"

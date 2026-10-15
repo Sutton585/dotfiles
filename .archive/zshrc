@@ -37,3 +37,5 @@ done
 [ -r "$HOME/.zshrc.local" ] && . "$HOME/.zshrc.local"
 
 unset f
+
+#eval "$(starship init zsh)"

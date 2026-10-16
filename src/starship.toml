@@ -20,12 +20,12 @@ add_newline = false
 [username]
 show_always = true
 format = "[$user]($style)@"
-style_user = "purple"
+style_user = "comment"
 
 [hostname]
 ssh_only = false
 format = "[$hostname]($style) "
-style = "green"
+style = "purplen"
 ssh_symbol = ""
 
 [directory]

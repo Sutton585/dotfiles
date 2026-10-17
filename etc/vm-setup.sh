@@ -28,6 +28,11 @@ if [ -z "$CURRENT_IP" ]; then
   fi
   echo "  └─ Hostname verified: $ACTIVE_NAME"
 
+  # Ensure SSH host keys exist (in case stripped from golden image) and restart sshd
+  echo "  └─ SSH: ensuring host keys exist..."
+  ssh-keygen -A
+  systemctl restart sshd
+
   echo "  └─ Requesting Tailscale login URL for '$HOST_NAME'..."
   tailscale up --reset --hostname="$HOST_NAME" 2>&1
 
@@ -75,53 +80,7 @@ echo "  └─ Hostname: $(cat /proc/sys/kernel/hostname) (verified)"
 echo "  └─ Tailscale: $TS_IPV4 (verified)"
 
 # -------------------------------------------------------------------------
-# 1. Enforce SSH Keys Only (Disable Passwords)
-# -------------------------------------------------------------------------
-echo ""
-echo "System Security:"
-echo "  └─ SSH: enforcing key-only authentication (passwords disabled)"
-mkdir -p /etc/ssh/sshd_config.d
-cat << 'SSHEOF' > /etc/ssh/sshd_config.d/99-hardened.conf
-PasswordAuthentication no
-KbdInteractiveAuthentication no
-AuthenticationMethods publickey
-SSHEOF
-systemctl reload sshd
-
-# -------------------------------------------------------------------------
-# 2. Lock Down Firewall & Terminate Stale Conntrack Sessions
-# -------------------------------------------------------------------------
-echo "  └─ Firewall: restricting incoming SSH strictly to tailscale0"
-cat << 'NFTEOF' > /etc/nftables.conf
-flush ruleset
-
-table inet filter {
-    chain input {
-        type filter hook input priority filter; policy drop;
-
-        iif "lo" accept
-        ct state established,related accept
-        ct state invalid drop
-
-        ip protocol icmp accept
-        ip6 nexthdr ipv6-icmp accept
-
-        iifname "tailscale0" tcp dport 22 accept
-    }
-    chain forward {
-        type filter hook forward priority filter; policy drop;
-    }
-    chain output {
-        type filter hook output priority filter; policy accept;
-    }
-}
-NFTEOF
-nft -c -f /etc/nftables.conf
-nft -f /etc/nftables.conf
-systemctl enable --now nftables
-
-# -------------------------------------------------------------------------
-# 3. Install Core System Tools & Shell Enhancements
+# 1. Install Core System Tools & Shell Enhancements
 # -------------------------------------------------------------------------
 echo ""
 echo "System Packages:"
@@ -134,12 +93,51 @@ if command -v pkgfile &>/dev/null; then
   (pkgfile -u >/dev/null 2>&1 &) || true
 fi
 
+# -------------------------------------------------------------------------
+# 2. Enforce SSH Keys Only (Disable Passwords)
+# -------------------------------------------------------------------------
+echo ""
+echo "System Security:"
+echo "  └─ SSH: enforcing key-only authentication (passwords disabled)"
+[ -s "/home/admin/.ssh/authorized_keys" ] || { echo "ERROR: no authorized_keys for admin; refusing to disable passwords."; exit 1; }
+mkdir -p /etc/ssh/sshd_config.d
+cat << 'SSHEOF' > /etc/ssh/sshd_config.d/99-hardened.conf
+PasswordAuthentication no
+KbdInteractiveAuthentication no
+AuthenticationMethods publickey
+SSHEOF
+sshd -t
+systemctl reload sshd
+
+# -------------------------------------------------------------------------
+# 3. Lock Down Firewall & Terminate Stale Conntrack Sessions
+# -------------------------------------------------------------------------
+echo "  └─ Firewall: installing tailscale-only ruleset"
+[ -f "/etc/nftables.locked.conf" ] || { echo "ERROR: /etc/nftables.locked.conf not found."; exit 1; }
+
+# Validate syntax before swapping
+nft -c -f /etc/nftables.locked.conf
+
+# Backup bootstrap ruleset, install locked ruleset, and remove staging file
+[ -f /etc/nftables.bootstrap.conf ] || cp -a /etc/nftables.conf /etc/nftables.bootstrap.conf
+install -m 600 /etc/nftables.locked.conf /etc/nftables.conf
+rm -f /etc/nftables.locked.conf
+nft -f /etc/nftables.conf
+systemctl enable --now nftables
+
+# Idempotently ensure the ext_secure network exists with the matching bridge name
+systemctl is-active --quiet docker || systemctl start docker
+docker network inspect ext_secure >/dev/null 2>&1 || \
+  docker network create --opt com.docker.network.bridge.name=br-exts ext_secure
+
+# Sever existing non-Tailscale SSH sessions
 if command -v conntrack &>/dev/null; then
   echo "  └─ conntrack: severing non-Tailscale SSH sessions"
-  # Kill any established conntrack flows on port 22 not destined for a Tailscale IP
-  for tip in $TS_IPS; do
-    conntrack -D -p tcp --dport 22 --dst-nat ! "$tip" >/dev/null 2>&1 || true
+  for ip in $(ip -4 -o addr show scope global | awk '$2!="tailscale0"{split($4,a,"/");print a[1]}'); do
+    conntrack -D -p tcp --dport 22 -d "$ip" >/dev/null 2>&1 || true
   done
+else
+  echo "  └─ WARNING: conntrack missing; existing LAN SSH sessions not severed"
 fi
 
 # -------------------------------------------------------------------------
@@ -147,16 +145,23 @@ fi
 # -------------------------------------------------------------------------
 echo ""
 echo "Security Verification:"
-if ! nft list chain inet filter input | grep -q 'iifname "tailscale0" tcp dport 22 accept'; then
-  echo "  └─ nftables: WARNING - rules do not appear to be loaded properly!"
+if nft list chain inet filter input | grep -q 'iifname "tailscale0" accept' \
+   && ! nft list chain inet filter input | grep -q 'dport 22'; then
+  echo "  └─ nftables: tailscale-only input active [PASS]"
 else
-  echo "  └─ nftables: port 22 restriction active [PASS]"
+  echo "  └─ nftables: WARNING - ruleset not as expected!"
 fi
 
 if ! sshd -T | grep -iq "passwordauthentication no"; then
   echo "  └─ sshd: WARNING - password authentication is still enabled!"
 else
   echo "  └─ sshd: password authentication disabled [PASS]"
+fi
+
+if ip link show br-exts >/dev/null 2>&1; then
+  echo "  └─ docker: ext_secure bridge br-exts present [PASS]"
+else
+  echo "  └─ docker: WARNING - br-exts missing!"
 fi
 
 # -------------------------------------------------------------------------

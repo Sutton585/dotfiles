@@ -47,13 +47,56 @@ else
   log 1 "└─ fzf: already present (cached)"
 fi
 
+if ! command -v bat >/dev/null 2>&1 && ! command -v batcat >/dev/null 2>&1; then
+  BAT_VER="0.24.0"
+  OS="$(uname -s | tr '[:upper:]' '[:lower:]')"
+  ARCH="$(uname -m)"
+  case "$OS-$ARCH" in
+    darwin-arm64)              TARGET="aarch64-apple-darwin" ;;
+    darwin-x86_64)             TARGET="x86_64-apple-darwin" ;;
+    linux-x86_64)              TARGET="x86_64-unknown-linux-musl" ;;
+    linux-aarch64|linux-arm64) TARGET="aarch64-unknown-linux-musl" ;;
+    *)                         TARGET="" ;;
+  esac
+  if [ -n "$TARGET" ]; then
+    TMP="$(mktemp -d)"
+    curl -sSL "https://github.com/sharkdp/bat/releases/download/v${BAT_VER}/bat-v${BAT_VER}-${TARGET}.tar.gz" | tar -xz -C "$TMP" 2>/dev/null || true
+    find "$TMP" -name bat -type f -exec cp {} "$HOME/.local/bin/bat" \; 2>/dev/null || true
+    chmod +x "$HOME/.local/bin/bat" 2>/dev/null || true
+    rm -rf "$TMP"
+  fi
+  if command -v bat >/dev/null 2>&1; then
+    log 1 "└─ bat: installed to ~/.local/bin"
+  else
+    log 1 "└─ bat: missing (install manually or put in ~/.local/bin)"
+  fi
+else
+  log 1 "└─ bat: already present (cached)"
+fi
+
 # Clean up legacy Starship symlink (now loaded via STARSHIP_CONFIG in dotfiles.sh)
 if [ -L "$HOME/.config/starship.toml" ]; then
   rm -f "$HOME/.config/starship.toml"
   log 1 "└─ legacy cleanup: removed obsolete ~/.config/starship.toml symlink"
 fi
 
-# --- 2. Install Zsh plugins (if zsh is available) ---
+# --- 2. Set up isolated virtualenv for sanitize_md ---
+VENV_DIR="$DOTFILES_DIR/src/sanitize_md/.venv"
+if [ ! -d "$VENV_DIR" ]; then
+  if command -v python3 >/dev/null 2>&1; then
+    python3 -m venv "$VENV_DIR" >/dev/null 2>&1 || true
+    if [ -x "$VENV_DIR/bin/pip" ]; then
+      "$VENV_DIR/bin/pip" install --quiet mdformat mdformat-gfm >/dev/null 2>&1 || true
+      log 1 "└─ sanitize_md: venv configured with mdformat"
+    fi
+  else
+    log 1 "└─ sanitize_md: python3 not found (skipping venv)"
+  fi
+else
+  log 1 "└─ sanitize_md: venv already present (cached)"
+fi
+
+# --- 3. Install Zsh plugins (if zsh is available) ---
 if command -v zsh >/dev/null 2>&1; then
   ZSH_PLUGIN_DIR="$HOME/.local/share/zsh-plugins"
   mkdir -p "$ZSH_PLUGIN_DIR"
@@ -83,7 +126,7 @@ else
   log 1 "└─ zsh plugins: skipped (zsh not installed)"
 fi
 
-# --- 3. Idempotently inject source line into RC files ---
+# --- 4. Idempotently inject source line into RC files ---
 inject_source() {
   local rc_file="$1"
   local name

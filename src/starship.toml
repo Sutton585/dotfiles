@@ -18,14 +18,14 @@ right_format = """$cmd_duration$time"""
 add_newline = false
 
 [username]
-show_always = true
+show_always = false
 format = "[$user]($style)@"
 style_user = "comment"
 
 [hostname]
 ssh_only = false
 format = "[$hostname]($style) "
-style = "purplen"
+style = "purple"
 ssh_symbol = ""
 
 [directory]
@@ -63,7 +63,7 @@ format = "[$duration]($style) "
 style = "comment"
 
 [time]
-disabled = false
+disabled = true
 time_format = "%R:%S"
 format = "[$time]($style)"
 style = "bold comment"

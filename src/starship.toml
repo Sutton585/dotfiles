@@ -13,7 +13,7 @@ $line_break\
 $python\
 $character"""
 
-right_format = """$cmd_duration$time"""
+right_format = """$cmd_duration"""
 
 add_newline = false
 
@@ -43,7 +43,7 @@ style = "bold comment"
 
 [git_status]
 format = "[[(*$conflicted$untracked$modified$staged$renamed$deleted)](red) ($ahead_behind$stashed)]($style)"
-style = "orange"
+style = "green"
 conflicted = ""
 untracked = ""
 modified = " "

@@ -1,0 +1,1126 @@
+diff --git a/.archive/messy-home-dir-issues.md b/.archive/messy-home-dir-issues.md
+deleted file mode 100644
+index dde6b8e..0000000
+--- a/.archive/messy-home-dir-issues.md
++++ /dev/null
+@@ -1,19 +0,0 @@
+-messy situation:
+-
+-
+-
+-on bully:
+-```bash
+-sutton585@bully in ~
+-❯ ls
+-.antigravity-ide-server/  .config/           .icons/     .vimrc      pictures/
+-.bashrc                   .docker/           .lesshst    .wget-hsts  public/
+-.bash_history             .dotfiles/         .local/     ...         services/
+-.bash_history-19707.tmp   .fzf/              .npm/       code/       s-extras
+-.bash_logout              .gemini/           .ssh/       desktop/    temp/
+-.bash_profile             .gitconfig         .stfolder/  documents/  videos/
+-.cache/                   .gitignore_global  .vim/       downloads/
+-.cargo/                   .gtkrc-2.0         .viminfo    music/
+-
+-```
+-This is a mess. how can i make those go into .local or something? needs to be more organized. 
+diff --git a/.archive/sys-setup-changes.md b/.archive/sys-setup-changes.md
+deleted file mode 100644
+index 9e3fa06..0000000
+--- a/.archive/sys-setup-changes.md
++++ /dev/null
+@@ -1,123 +0,0 @@
+-In previous conversation, we made a nftables.new.conf file so we can safely swap to it instead of making individual changes in the file itselt during. `sys-setup.sh`
+-
+-I still need to actually update the sys-setup.sh script. i need your help to understand and make these adjustemnts:
+-
+----
+-
+-## Recommendation: swap the file, don't generate it in the script
+-
+-Put the finished ruleset in the image and have the script just install it. One tested file is the single source of truth; the script's heredoc is a second copy that drifts.
+-
+-| | Golden image | Setup script |
+-|---|---|---|
+-| `/etc/nftables.conf` | Bootstrap: allows LAN SSH (your current file) | Replaced by the locked file |
+-| `/etc/nftables.locked.conf` | Staged, validated ruleset (rename your `.new.conf`) | Installed over `nftables.conf` |
+-| Docker, nftables, tailscale installed and enabled | Yes | No |
+-| `ext_secure` network | Optional | Create idempotently (preferred) |
+-| Hostname, Tailscale login, SSH hardening | No (per-machine) | Yes |
+-
+-Create the network in the script rather than the image. It's one line, safe to re-run, and doesn't depend on Docker state surviving into clones:
+-
+-```
+-docker network inspect ext_secure >/dev/null 2>&1 || \
+-  docker network create --opt com.docker.network.bridge.name=br-exts ext_secure
+-```
+-
+-current nftables.locked.conf:
+-```bash
+-[admin@archvm ~]$ cat /etc/nftables.locked.conf
+-#!/usr/bin/nft -f
+-# vim:set ts=2 sw=2 et:
+-
+-destroy table inet filter
+-table inet filter {
+-  chain input {
+-    type filter hook input priority filter
+-    policy drop
+-
+-    ct state invalid drop comment "early drop of invalid connections"
+-    ct state {established, related} accept comment "allow tracked connections"
+-    iif lo accept comment "allow from loopback"
+-    iifname "tailscale0" accept comment "allow all from tailscale"
+-    meta l4proto { icmp, icmpv6 } accept comment "allow icmp (icmpv6 required for IPv6 ND)"
+-    counter comment "dropped by policy"
+-  }
+-
+-  chain forward {
+-    type filter hook forward priority filter
+-    policy drop
+-
+-    ct state invalid drop
+-    ct state {established, related} accept comment "replies"
+-    iifname "tailscale0" oifname "br-exts" accept comment "tailnet -> ext_secure"
+-    iifname "br-exts" accept comment "ext_secure: intra-bridge + egress"
+-  }
+-}
+-```
+-
+-## Problems in the current script
+-
+-1. **`flush ruleset` is dangerous.** It wipes Docker's and Tailscale's rules (they use `iptables-nft`). It also races with them at boot. The new file uses `destroy table inet filter`, which touches only your table.
+-2. **The forward chain is empty.** Containers would have no traffic at all. The new file fixes this.
+-3. **Input allows only tailscale port 22.** It should allow all of `tailscale0`.
+-4. **The conntrack kill probably does nothing.** `--dst-nat ! ip` is not a destination filter. This step matters because `ct state established` accepts any LAN SSH session that was open before the swap. Replace it (below).
+-5. **Lockout risk.** Password auth is disabled with no check that a key exists. Add a guard.
+-6. **The verification grep** looks for the old rule and will fail after the swap.
+-7. **Redundant `output` chain.** Remove it.
+-
+-## Patched script sections
+-
+-**Section 1: SSH hardening.** Add before writing the sshd config:
+-
+-```
+-[ -s "/home/admin/.ssh/authorized_keys" ] || { echo "ERROR: no authorized_keys for admin; refusing to disable passwords."; exit 1; }
+-```
+-
+-(Adjust the user if your key lives elsewhere.)
+-
+-**Section 2: Firewall.** Replace the heredoc block:
+-
+-```
+-echo "  └─ Firewall: installing tailscale-only ruleset"
+-nft -c -f /etc/nftables.locked.conf
+-cp -a /etc/nftables.conf /etc/nftables.bootstrap.conf
+-install -m 600 /etc/nftables.locked.conf /etc/nftables.conf
+-nft -f /etc/nftables.conf
+-systemctl enable nftables
+-
+-docker network inspect ext_secure >/dev/null 2>&1 || \
+-  docker network create --opt com.docker.network.bridge.name=br-exts ext_secure
+-```
+-
+-**Section 3: Conntrack.** Replace the loop to kill existing non-Tailscale SSH flows:
+-
+-```
+-for ip in $(ip -4 -o addr show scope global | awk '$2!="tailscale0"{split($4,a,"/");print a[1]}'); do
+-  conntrack -D -p tcp --dport 22 -d "$ip" >/dev/null 2>&1 || true
+-done
+-```
+-
+-This matches the original destination, so it kills LAN sessions but not your current Tailscale one.
+-
+-**Section 4: Verification:**
+-
+-```
+-if nft list chain inet filter input | grep -q 'iifname "tailscale0" accept' \
+-   && ! nft list chain inet filter input | grep -q 'dport 22'; then
+-  echo "  └─ nftables: tailscale-only input active [PASS]"
+-else
+-  echo "  └─ nftables: WARNING - ruleset not as expected!"
+-fi
+-```
+-
+-## Order of operations
+-
+-1. **Golden image:** keep the current `/etc/nftables.conf` (LAN SSH works) and add `/etc/nftables.locked.conf`.
+-2. **First run:** hostname, Tailscale login, exit (as now).
+-3. **Second run over Tailscale:** SSH hardening, firewall swap, network creation, conntrack cleanup, dotfiles.
+-
+-## Notes
+-
+-- **Archiving:** your script moves itself to `/var/log/provisioning`. That's fine, but re-running it afterward requires copying it back.
+-- **Rollback:** `/etc/nftables.bootstrap.conf` is the way back to LAN SSH from the console if Tailscale breaks.
+-- **Test once before cloning:** run the script on one throwaway VM from the image, then run the verification table from my last message (tailnet works, LAN times out, container egress works).
+\ No newline at end of file
+diff --git a/etc/vm-setup.sh b/.archive/sys-setup.sh
+similarity index 75%
+rename from etc/vm-setup.sh
+rename to .archive/sys-setup.sh
+index fa226a3..a77005b 100755
+--- a/etc/vm-setup.sh
++++ b/.archive/sys-setup.sh
+@@ -28,11 +28,6 @@ if [ -z "$CURRENT_IP" ]; then
+   fi
+   echo "  └─ Hostname verified: $ACTIVE_NAME"
+ 
+-  # Ensure SSH host keys exist (in case stripped from golden image) and restart sshd
+-  echo "  └─ SSH: ensuring host keys exist..."
+-  ssh-keygen -A
+-  systemctl restart sshd
+-
+   echo "  └─ Requesting Tailscale login URL for '$HOST_NAME'..."
+   tailscale up --reset --hostname="$HOST_NAME" 2>&1
+ 
+@@ -80,64 +75,71 @@ echo "  └─ Hostname: $(cat /proc/sys/kernel/hostname) (verified)"
+ echo "  └─ Tailscale: $TS_IPV4 (verified)"
+ 
+ # -------------------------------------------------------------------------
+-# 1. Install Core System Tools & Shell Enhancements
+-# -------------------------------------------------------------------------
+-echo ""
+-echo "System Packages:"
+-echo "  └─ Core utilities: installing bash-completion, pkgfile, conntrack-tools"
+-pacman -S --needed --noconfirm bash-completion pkgfile conntrack-tools >/dev/null 2>&1 || true
+-
+-if command -v pkgfile &>/dev/null; then
+-  echo "  └─ pkgfile: update timer enabled (indexing in background)"
+-  systemctl enable --now pkgfile-update.timer >/dev/null 2>&1 || true
+-  (pkgfile -u >/dev/null 2>&1 &) || true
+-fi
+-
+-# -------------------------------------------------------------------------
+-# 2. Enforce SSH Keys Only (Disable Passwords)
++# 1. Enforce SSH Keys Only (Disable Passwords)
+ # -------------------------------------------------------------------------
+ echo ""
+ echo "System Security:"
+ echo "  └─ SSH: enforcing key-only authentication (passwords disabled)"
+-[ -s "/home/admin/.ssh/authorized_keys" ] || { echo "ERROR: no authorized_keys for admin; refusing to disable passwords."; exit 1; }
+ mkdir -p /etc/ssh/sshd_config.d
+ cat << 'SSHEOF' > /etc/ssh/sshd_config.d/99-hardened.conf
+ PasswordAuthentication no
+ KbdInteractiveAuthentication no
+ AuthenticationMethods publickey
+ SSHEOF
+-sshd -t
+ systemctl reload sshd
+ 
+ # -------------------------------------------------------------------------
+-# 3. Lock Down Firewall & Terminate Stale Conntrack Sessions
++# 2. Lock Down Firewall & Terminate Stale Conntrack Sessions
+ # -------------------------------------------------------------------------
+-echo "  └─ Firewall: installing tailscale-only ruleset"
+-[ -f "/etc/nftables.locked.conf" ] || { echo "ERROR: /etc/nftables.locked.conf not found."; exit 1; }
++echo "  └─ Firewall: restricting incoming SSH strictly to tailscale0"
++cat << 'NFTEOF' > /etc/nftables.conf
++flush ruleset
++
++table inet filter {
++    chain input {
++        type filter hook input priority filter; policy drop;
++
++        iif "lo" accept
++        ct state established,related accept
++        ct state invalid drop
+ 
+-# Validate syntax before swapping
+-nft -c -f /etc/nftables.locked.conf
++        ip protocol icmp accept
++        ip6 nexthdr ipv6-icmp accept
+ 
+-# Backup bootstrap ruleset, install locked ruleset, and remove staging file
+-[ -f /etc/nftables.bootstrap.conf ] || cp -a /etc/nftables.conf /etc/nftables.bootstrap.conf
+-install -m 600 /etc/nftables.locked.conf /etc/nftables.conf
+-rm -f /etc/nftables.locked.conf
++        iifname "tailscale0" tcp dport 22 accept
++    }
++    chain forward {
++        type filter hook forward priority filter; policy drop;
++    }
++    chain output {
++        type filter hook output priority filter; policy accept;
++    }
++}
++NFTEOF
++nft -c -f /etc/nftables.conf
+ nft -f /etc/nftables.conf
+ systemctl enable --now nftables
+ 
+-# Idempotently ensure the ext_secure network exists with the matching bridge name
+-systemctl is-active --quiet docker || systemctl start docker
+-docker network inspect ext_secure >/dev/null 2>&1 || \
+-  docker network create --opt com.docker.network.bridge.name=br-exts ext_secure
++# -------------------------------------------------------------------------
++# 3. Install Core System Tools & Shell Enhancements
++# -------------------------------------------------------------------------
++echo ""
++echo "System Packages:"
++echo "  └─ Core utilities: installing bash-completion, pkgfile, conntrack-tools"
++pacman -S --needed --noconfirm bash-completion pkgfile conntrack-tools >/dev/null 2>&1 || true
++
++if command -v pkgfile &>/dev/null; then
++  echo "  └─ pkgfile: update timer enabled (indexing in background)"
++  systemctl enable --now pkgfile-update.timer >/dev/null 2>&1 || true
++  (pkgfile -u >/dev/null 2>&1 &) || true
++fi
+ 
+-# Sever existing non-Tailscale SSH sessions
+ if command -v conntrack &>/dev/null; then
+   echo "  └─ conntrack: severing non-Tailscale SSH sessions"
+-  for ip in $(ip -4 -o addr show scope global | awk '$2!="tailscale0"{split($4,a,"/");print a[1]}'); do
+-    conntrack -D -p tcp --dport 22 -d "$ip" >/dev/null 2>&1 || true
++  # Kill any established conntrack flows on port 22 not destined for a Tailscale IP
++  for tip in $TS_IPS; do
++    conntrack -D -p tcp --dport 22 --dst-nat ! "$tip" >/dev/null 2>&1 || true
+   done
+-else
+-  echo "  └─ WARNING: conntrack missing; existing LAN SSH sessions not severed"
+ fi
+ 
+ # -------------------------------------------------------------------------
+@@ -145,11 +147,10 @@ fi
+ # -------------------------------------------------------------------------
+ echo ""
+ echo "Security Verification:"
+-if nft list chain inet filter input | grep -q 'iifname "tailscale0" accept' \
+-   && ! nft list chain inet filter input | grep -q 'dport 22'; then
+-  echo "  └─ nftables: tailscale-only input active [PASS]"
++if ! nft list chain inet filter input | grep -q 'iifname "tailscale0" tcp dport 22 accept'; then
++  echo "  └─ nftables: WARNING - rules do not appear to be loaded properly!"
+ else
+-  echo "  └─ nftables: WARNING - ruleset not as expected!"
++  echo "  └─ nftables: port 22 restriction active [PASS]"
+ fi
+ 
+ if ! sshd -T | grep -iq "passwordauthentication no"; then
+@@ -158,12 +159,6 @@ else
+   echo "  └─ sshd: password authentication disabled [PASS]"
+ fi
+ 
+-if ip link show br-exts >/dev/null 2>&1; then
+-  echo "  └─ docker: ext_secure bridge br-exts present [PASS]"
+-else
+-  echo "  └─ docker: WARNING - br-exts missing!"
+-fi
+-
+ # -------------------------------------------------------------------------
+ # 5. Clone Dotfiles & Run User Setup Script
+ # -------------------------------------------------------------------------
+diff --git a/.gitignore b/.gitignore
+index 491191f..df78fe7 100644
+--- a/.gitignore
++++ b/.gitignore
+@@ -1,3 +1,2 @@
+ *.bak
+ */.DS_Store
+-.venv/
+diff --git a/etc/snag.sh b/etc/snag.sh
+deleted file mode 100644
+index d0b9d42..0000000
+--- a/etc/snag.sh
++++ /dev/null
+@@ -1,28 +0,0 @@
+-#!/usr/bin/env bash
+-# git-snag: pull one directory (recursively) from a GitHub repo, no git history.
+-# Usage: git-snag <dir-name> <repo-url> [branch]
+-set -euo pipefail
+-
+-TARGET="$1"
+-REPO_URL="$2"
+-BRANCH="${3:-main}"
+-
+-# Derive owner/repo from URL, strip .git
+-REPO_PATH=$(echo "$REPO_URL" | sed -E 's#https?://github\.com/##; s#\.git$##')
+-
+-TMP=$(mktemp -d)
+-trap 'rm -rf "$TMP"' EXIT
+-
+-curl -sL "https://github.com/$REPO_PATH/tarball/$BRANCH" | tar -xz -C "$TMP"
+-
+-# Find target dir, case-insensitive, shallowest match wins
+-MATCH=$(find "$TMP" -type d -iname "$TARGET" | awk '{print gsub(/\//,"/"), $0}' | sort -n | head -1 | cut -d' ' -f2-)
+-
+-if [ -z "$MATCH" ]; then
+-  echo "Error: directory '$TARGET' not found in $REPO_PATH@$BRANCH" >&2
+-  exit 1
+-fi
+-
+-mv "$MATCH" "./$(basename "$MATCH")"
+-echo "Pulled: $(basename "$MATCH")"
+-
+diff --git a/setup.sh b/setup.sh
+index e78b495..37dc6a3 100644
+--- a/setup.sh
++++ b/setup.sh
+@@ -47,56 +47,13 @@ else
+   log 1 "└─ fzf: already present (cached)"
+ fi
+ 
+-if ! command -v bat >/dev/null 2>&1 && ! command -v batcat >/dev/null 2>&1; then
+-  BAT_VER="0.24.0"
+-  OS="$(uname -s | tr '[:upper:]' '[:lower:]')"
+-  ARCH="$(uname -m)"
+-  case "$OS-$ARCH" in
+-    darwin-arm64)              TARGET="aarch64-apple-darwin" ;;
+-    darwin-x86_64)             TARGET="x86_64-apple-darwin" ;;
+-    linux-x86_64)              TARGET="x86_64-unknown-linux-musl" ;;
+-    linux-aarch64|linux-arm64) TARGET="aarch64-unknown-linux-musl" ;;
+-    *)                         TARGET="" ;;
+-  esac
+-  if [ -n "$TARGET" ]; then
+-    TMP="$(mktemp -d)"
+-    curl -sSL "https://github.com/sharkdp/bat/releases/download/v${BAT_VER}/bat-v${BAT_VER}-${TARGET}.tar.gz" | tar -xz -C "$TMP" 2>/dev/null || true
+-    find "$TMP" -name bat -type f -exec cp {} "$HOME/.local/bin/bat" \; 2>/dev/null || true
+-    chmod +x "$HOME/.local/bin/bat" 2>/dev/null || true
+-    rm -rf "$TMP"
+-  fi
+-  if command -v bat >/dev/null 2>&1; then
+-    log 1 "└─ bat: installed to ~/.local/bin"
+-  else
+-    log 1 "└─ bat: missing (install manually or put in ~/.local/bin)"
+-  fi
+-else
+-  log 1 "└─ bat: already present (cached)"
+-fi
+-
+ # Clean up legacy Starship symlink (now loaded via STARSHIP_CONFIG in dotfiles.sh)
+ if [ -L "$HOME/.config/starship.toml" ]; then
+   rm -f "$HOME/.config/starship.toml"
+   log 1 "└─ legacy cleanup: removed obsolete ~/.config/starship.toml symlink"
+ fi
+ 
+-# --- 2. Set up isolated virtualenv for sanitize_md ---
+-VENV_DIR="$DOTFILES_DIR/src/sanitize_md/.venv"
+-if [ ! -d "$VENV_DIR" ]; then
+-  if command -v python3 >/dev/null 2>&1; then
+-    python3 -m venv "$VENV_DIR" >/dev/null 2>&1 || true
+-    if [ -x "$VENV_DIR/bin/pip" ]; then
+-      "$VENV_DIR/bin/pip" install --quiet mdformat mdformat-gfm >/dev/null 2>&1 || true
+-      log 1 "└─ sanitize_md: venv configured with mdformat"
+-    fi
+-  else
+-    log 1 "└─ sanitize_md: python3 not found (skipping venv)"
+-  fi
+-else
+-  log 1 "└─ sanitize_md: venv already present (cached)"
+-fi
+-
+-# --- 3. Install Zsh plugins (if zsh is available) ---
++# --- 2. Install Zsh plugins (if zsh is available) ---
+ if command -v zsh >/dev/null 2>&1; then
+   ZSH_PLUGIN_DIR="$HOME/.local/share/zsh-plugins"
+   mkdir -p "$ZSH_PLUGIN_DIR"
+@@ -126,7 +83,7 @@ else
+   log 1 "└─ zsh plugins: skipped (zsh not installed)"
+ fi
+ 
+-# --- 4. Idempotently inject source line into RC files ---
++# --- 3. Idempotently inject source line into RC files ---
+ inject_source() {
+   local rc_file="$1"
+   local name
+diff --git a/src/aliases.sh b/src/aliases.sh
+index 0c72e0c..a74bb97 100644
+--- a/src/aliases.sh
++++ b/src/aliases.sh
+@@ -1,18 +1,2 @@
+ alias ..='cd ..'
+-alias ...='cd ../..'
+-cpr() {
+-  rsync --archive -hh --partial --info=stats1,progress2 --modify-window=1 "$@"
+-} 
+-mvr() {
+-  rsync --archive -hh --partial --info=stats1,progress2 --modify-window=1 --remove-source-files "$@"
+-}
+-
+-if command -v bat >/dev/null 2>&1; then
+-  alias cat='bat'
+-elif command -v batcat >/dev/null 2>&1; then
+-  alias cat='batcat'
+-fi
+-
+-f(){
+-  fzf --preview "bat --color=always --style=numbers --line-range=:500 {}"
+-}
+\ No newline at end of file
++alias ...='cd ../..'
+\ No newline at end of file
+diff --git a/src/sanitize_md/init.sh b/src/sanitize_md/init.sh
+deleted file mode 100644
+index 0399157..0000000
+--- a/src/sanitize_md/init.sh
++++ /dev/null
+@@ -1,37 +0,0 @@
+-sanitize_md() {
+-  # 1. Check if python3 is installed
+-  if ! command -v python3 >/dev/null 2>&1; then
+-    echo "Error: python3 is not installed or not in PATH." >&2
+-    return 1
+-  fi
+-
+-  # 2. Get the directory where THIS script/init.sh lives
+-  # In Zsh: ${(%):-%x} gives the path of the sourced file; in Bash: ${BASH_SOURCE[0]}
+-  local script_dir
+-  if [ -n "$ZSH_VERSION" ]; then
+-    script_dir="${${(%):-%x}:A:h}"
+-  elif [ -n "$BASH_SOURCE" ]; then
+-    script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+-  else
+-    script_dir="$HOME/dev/mac/dotfiles/src/sanitize_md"
+-  fi
+-
+-  local python_script="$script_dir/script.py"
+-  local py_bin="python3"
+-  if [ -x "$script_dir/.venv/bin/python3" ]; then
+-    py_bin="$script_dir/.venv/bin/python3"
+-  fi
+-
+-  # 3. Handle inputs
+-  # If you gave it a file: sanitize_md job.md
+-  if [ -f "$1" ]; then
+-    "$py_bin" "$python_script" < "$1"
+-  # If you ran it bare with no args and no piped input: sanitize the clipboard
+-  elif [ -t 0 ] && [ $# -eq 0 ]; then
+-    pbpaste | "$py_bin" "$python_script" | pbcopy
+-    echo "✨ Clipboard sanitized!"
+-  # Otherwise handle piped input or direct text arguments
+-  else
+-    "$py_bin" "$python_script" "$@"
+-  fi
+-}
+diff --git a/src/sanitize_md/script.py b/src/sanitize_md/script.py
+deleted file mode 100644
+index d87143f..0000000
+--- a/src/sanitize_md/script.py
++++ /dev/null
+@@ -1,577 +0,0 @@
+-import unicodedata
+-import re
+-import html
+-import logging
+-
+-logger = logging.getLogger("sanitize_md")
+-logger.setLevel(logging.INFO)
+-
+-STANDARDIZE_BULLET_LISTS = True    # Converts * or + bullets to hyphen -
+-REMOVE_BOLD_FROM_LISTS = True      # Converts "- **Bold**" to "- Bold"
+-REMOVE_ITALIC_FROM_LISTS = True    # Converts "- *Italic*" to "- Italic"
+-
+-# --- Header Detection Thresholds ---
+-# ALL CAPS lines shorter than MIN or longer than MAX won't be promoted to headers.
+-MIN_ALL_CAPS_HEADER_LEN = 5
+-MAX_ALL_CAPS_HEADER_LEN = 60
+-# Lines ending in punctuation shorter than this threshold get promoted to headers.
+-MAX_PUNCT_HEADER_LEN = 72
+-# Structural context: plain short lines flanked by long text are promoted.
+-MAX_STRUCTURAL_HEADER_LEN = 36
+-MIN_FLANKING_LINE_LEN = 70
+-
+-
+-# ---------------------------------------------------------------------------
+-# Helper Functions
+-# ---------------------------------------------------------------------------
+-
+-def is_all_caps(line: str) -> bool:
+-    stripped = line.strip()
+-
+-    # Exclude if empty
+-    if not stripped:
+-        return False
+-
+-    # Exclude if already formatted as markdown
+-    if stripped.startswith("#"):
+-        return False
+-
+-    # Exclude if contains 'chapter' (case-insensitive)
+-    if "chapter" in stripped.lower():
+-        return False
+-
+-    # Exclude if contains '|'
+-    if "|" in stripped:
+-        return False
+-
+-    # Must be within length bounds to be considered a header
+-    if len(stripped) < MIN_ALL_CAPS_HEADER_LEN:
+-        return False
+-    if len(stripped) > MAX_ALL_CAPS_HEADER_LEN:
+-        return False
+-
+-    # Must contain only uppercase letters or non-letter symbols
+-    return all(c.isupper() or not c.isalpha() for c in stripped)
+-
+-
+-def decode_unicode_escapes(text: str) -> str:
+-    def repl(match):
+-        try:
+-            return bytes(match.group(0), 'utf-8').decode('unicode_escape')
+-        except Exception:
+-            return match.group(0)  # Return as-is if decoding fails
+-    return re.sub(r'\\u[0-9a-fA-F]{4}', repl, text)
+-
+-
+-def _extract_code_blocks(text: str) -> tuple[str, list[str]]:
+-    """Extract markdown code blocks and replace them with placeholders."""
+-    code_blocks = []
+-    def replacer(match):
+-        code_blocks.append(match.group(0))
+-        return f"___CODE_BLOCK_{len(code_blocks)-1}___"
+-    
+-    text = re.sub(r'(?s)```.*?```', replacer, text)
+-    return text, code_blocks
+-
+-
+-def _restore_code_blocks(text: str, code_blocks: list[str]) -> str:
+-    """Restore extracted code blocks from placeholders."""
+-    for i, block in enumerate(code_blocks):
+-        text = text.replace(f"___CODE_BLOCK_{i}___", block)
+-    return text
+-
+-
+-def _strip_formatting(line: str) -> str:
+-    """Strip outer Markdown formatting (bold, italic, bold-italic) from a line.
+-
+-    Examples:
+-        '**Requirements:**' -> 'Requirements:'
+-        '*Physical Requirements:*' -> 'Physical Requirements:'
+-        '***Important***' -> 'Important'
+-        '_Underline Title_' -> 'Underline Title'
+-    """
+-    s = line.strip()
+-    # Bold-italic (*** or ___) 
+-    m = re.match(r'^(\*{3}|_{3})(.+?)\1$', s)
+-    if m:
+-        return m.group(2).strip()
+-    # Bold (** or __)
+-    m = re.match(r'^(\*{2}|_{2})(.+?)\1$', s)
+-    if m:
+-        return m.group(2).strip()
+-    # Italic (* or _) — single marker
+-    m = re.match(r'^(\*|_)(.+?)\1$', s)
+-    if m:
+-        return m.group(2).strip()
+-    return s
+-
+-
+-def _is_list_item(line: str) -> bool:
+-    """Check if a line is a bullet or numbered list item."""
+-    return bool(re.match(r'^\s*([\-\*\+\•]|\d+\.)\s+', line))
+-
+-
+-def _convert_setext_headers(text: str) -> str:
+-    """Convert Markdown Setext headers (underlined with = or -) into ATX headers (# or ##).
+-    
+-    In Markdown specifications (CommonMark / GFM), a line of text followed immediately
+-    by a line of '=' characters is an H1 Setext heading, and a line followed by '-' characters
+-    is an H2 Setext heading.
+-    
+-    This function MUST run before horizontal rules (hr_pattern) are removed, because
+-    horizontal rules use the exact same characters ('---') and would otherwise erase
+-    the Setext underline, leaving the heading stranded as plain text.
+-
+-    Safety Guards:
+-      - Title must not be an empty line or list item (bullet/number).
+-      - Title must not itself be a horizontal divider or header.
+-      - Length of clean title must be <= MAX_PUNCT_HEADER_LEN (72 chars).
+-      - Title must not end with a period '.', preventing normal sentences that happen
+-        to precede a horizontal divider line from being misidentified as headers.
+-    """
+-    lines = text.split('\n')
+-    output = []
+-    i = 0
+-    total_lines = len(lines)
+-    
+-    while i < total_lines:
+-        line = lines[i]
+-        stripped = line.strip()
+-        
+-        # Check if the next line is a Setext underline (= or -)
+-        if i + 1 < total_lines and stripped:
+-            next_stripped = lines[i + 1].strip()
+-            
+-            # Check for Setext H1 (===...) or Setext H2 (---...)
+-            is_eq = bool(re.match(r'^={2,}\s*$', next_stripped))
+-            is_dash = bool(re.match(r'^-{2,}\s*$', next_stripped))
+-            
+-            if (is_eq or is_dash) and not _is_list_item(stripped) and not stripped.startswith('#'):
+-                # Ensure the line is not a horizontal rule itself
+-                if not re.match(r'^[-_*=]{2,}$', stripped):
+-                    clean_title = _strip_formatting(stripped)
+-                    # Safety check: avoid converting sentences that precede divider lines
+-                    if len(clean_title) <= MAX_PUNCT_HEADER_LEN and not clean_title.endswith('.'):
+-                        level = 1 if is_eq else 2
+-                        logger.debug(f"Promoting Setext H{level} header: '{clean_title}'")
+-                        output.append(f"\n{'#' * level} {clean_title}\n")
+-                        i += 2
+-                        continue
+-        
+-        output.append(line)
+-        i += 1
+-        
+-    return '\n'.join(output)
+-
+-
+-def _is_pseudo_header(line: str, above_blank: bool, lines: list, idx: int) -> bool:
+-    """Determine if a non-header line should be promoted to a header.
+-
+-    Evaluates four rules against a formatting-stripped version of the line:
+-      Rule 1: ALL CAPS text (5-60 chars).
+-      Rule 2: Ends in ':' or '?' (< MAX_PUNCT_HEADER_LEN chars).
+-      Rule 3: Standalone formatting (entire line is bold, italic, or bold-italic).
+-      Rule 4: Structural context (short plain line flanked by long text or lists).
+-
+-    Boundary Constraints:
+-      - If preceded by a blank line, start of doc, or end of list/code block: qualifies.
+-      - If NOT preceded by a blank line:
+-        * Qualifies if immediately followed by a list item, code block, or explicit header.
+-        * Qualifies if standalone bold, colon-terminated, or ALL CAPS with length <= MAX_STRUCTURAL_HEADER_LEN (36 chars)
+-          starting with an uppercase letter, PROVIDED the next line is not a lowercase sentence continuation.
+-    """
+-    stripped = line.strip()
+-    if not stripped or stripped.startswith("#") or stripped.startswith(">"):
+-        return False
+-
+-    # Standard list items are never pseudo-headers
+-    if _is_list_item(stripped):
+-        return False
+-
+-    clean = _strip_formatting(stripped)
+-
+-    # Lines ending in a period are sentences/content, not headers
+-    if clean.endswith('.'):
+-        return False
+-
+-    # Look ahead to find the next non-blank line
+-    next_line = ""
+-    for j in range(idx + 1, len(lines)):
+-        nxt = lines[j].strip()
+-        if nxt:
+-            next_line = nxt
+-            break
+-
+-    # If the next line begins with a lowercase letter, this line is part of a
+-    # hard-wrapped sentence (e.g. "We need\n**Python Experience**\nto build..."), NOT a header.
+-    if next_line and next_line[0].islower():
+-        return False
+-
+-    # Boundary context verification
+-    if not above_blank:
+-        # 1. Previous line was a list item or code block
+-        if idx > 0 and (_is_list_item(lines[idx - 1]) or "___CODE_BLOCK_" in lines[idx - 1]):
+-            pass
+-        # 2. Next line is a list item or code block or header (introductory section header)
+-        elif next_line and (_is_list_item(next_line) or "___CODE_BLOCK_" in next_line or next_line.startswith("#")):
+-            pass
+-        # 3. Short standalone bold, colon-terminated, or ALL CAPS header starting with capital letter
+-        elif (re.match(r'^(\*{1,3}|_{1,3}).+?\1$', stripped) or clean.endswith(':') or is_all_caps(clean)) and len(clean) <= MAX_STRUCTURAL_HEADER_LEN and clean and clean[0].isupper():
+-            pass
+-        else:
+-            return False
+-
+-    # Rule 1: ALL CAPS
+-    if is_all_caps(clean):
+-        return True
+-
+-    # Rule 2: Ending punctuation (: or ?) after stripping formatting
+-    if len(clean) < MAX_PUNCT_HEADER_LEN and not _is_list_item(stripped):
+-        if clean.endswith(':') or clean.endswith('?'):
+-            return True
+-
+-    # Rule 3: Standalone formatting (entire line is bold, italic, or bold-italic)
+-    if re.match(r'^(\*{1,3}|_{1,3}).+?\1$', stripped) and len(clean) < MAX_PUNCT_HEADER_LEN:
+-        return True
+-
+-    # Rule 4: Structural context — short plain line flanked by long text or list blocks
+-    if len(clean) < MAX_STRUCTURAL_HEADER_LEN:
+-        # Exclude lines that look like key-value pairs (e.g. "Equity Grade - 14")
+-        if re.search(r'\s+[-–—]\s+[A-Za-z0-9]+$', clean):
+-            return False
+-            
+-        # Exclude inline key-value pairs (e.g. "Location: New York")
+-        if ':' in clean and not clean.endswith(':'):
+-            return False
+-
+-        next_len = len(next_line) if next_line else 0
+-        if "___CODE_BLOCK_" in next_line:
+-            next_len = 100
+-
+-        is_next_list = _is_list_item(next_line) if next_line else False
+-        is_next_header = next_line.startswith("#") if next_line else False
+-
+-        is_next_pseudo = False
+-        if next_line:
+-            clean_next = _strip_formatting(next_line)
+-            if is_all_caps(clean_next):
+-                is_next_pseudo = True
+-            elif len(clean_next) < MAX_PUNCT_HEADER_LEN and not _is_list_item(next_line) and (clean_next.endswith(':') or clean_next.endswith('?')):
+-                is_next_pseudo = True
+-            elif len(clean_next) < MAX_PUNCT_HEADER_LEN and re.match(r'^(\*{1,3}|_{1,3}).+?\1$', next_line):
+-                is_next_pseudo = True
+-
+-        if next_len >= MIN_FLANKING_LINE_LEN or is_next_list or is_next_header or is_next_pseudo:
+-            return True
+-
+-    return False
+-
+-
+-
+-# ---------------------------------------------------------------------------
+-# Main Sanitization Pipeline
+-# ---------------------------------------------------------------------------
+-
+-def sanitize_description(text: str) -> str:
+-    if not text:
+-        return text
+-    
+-    original_length = len(text)
+-    logger.info(f"sanitize_description STARTED. Original length: {original_length}")
+-
+-    # ======================================================================
+-    # Phase 1: Encoding & Character-Level Normalization
+-    # ======================================================================
+-    # Normalize line endings first for predictable extraction
+-    text = text.replace('\r\n', '\n').replace('\r', '\n')
+-
+-    # Decode \uXXXX escapes
+-    if '\\u' in text:
+-        text = decode_unicode_escapes(text)
+-
+-    # Protect code blocks before HTML/backslash stripping
+-    text, code_blocks = _extract_code_blocks(text)
+-
+-    # Remove HTML tags
+-    text = re.sub(r'<[^>]+>', '', text)
+-
+-    # Convert common HTML entities
+-    text = html.unescape(text)
+-
+-    # Normalize line breaks from RTF
+-    text = text.replace('\u2028', '\n').replace('\u2029', '\n')
+-
+-    # Remove soft hyphen (U+00AD) BEFORE normalization
+-    text = text.replace('\u00AD', '')
+-
+-    # Normalize to NFKC
+-    text = unicodedata.normalize('NFKC', text)
+-
+-    # Replace all Unicode Zs ("space separator") category chars with standard space
+-    text = ''.join(' ' if unicodedata.category(c) == 'Zs' else c for c in text)
+-
+-    # Replace other invisible/zero-width spacing characters with normal space
+-    invisible_to_space = {
+-        '\u200B', '\u200C', '\u200D', '\u2060', '\uFEFF',
+-        '\u2009', '\u200A', '\u202F', '\u205F',
+-    }
+-    text = ''.join(' ' if c in invisible_to_space else c for c in text)
+-
+-    # Normalize line endings (soft/carriage returns -> linefeeds)
+-    text = text.replace('\r\n', '\n').replace('\r', '\n')
+-
+-    # Normalize more soft return variants to hard returns
+-    for sr in ['\u2028', '\u2029', '\v', '\f']:
+-        text = text.replace(sr, '\n')
+-
+-    text = re.sub(r'\n{3,}', '\n\n', text)  # Max two newlines in a row
+-
+-    # Convert Setext headers (Text followed by === or ---) to ATX headers (# or ##)
+-    # MUST be done before hr_pattern strips the underlines!
+-    text = _convert_setext_headers(text)
+-
+-    # Remove Markdown Horizontal Rules
+-    hr_pattern = re.compile(r'(?m)^\s*([-_*=])(?:\s*\1){2,}\s*$', re.MULTILINE)
+-    text, _ = hr_pattern.subn('', text)
+-
+-    # Replace Confusables (Cyrillic -> ASCII, fullwidth -> ASCII)
+-    CONFUSABLES = {
+-        'а': 'a', 'е': 'e', 'і': 'i', 'о': 'o', 'р': 'p',
+-        'с': 'c', 'у': 'y', 'х': 'x',
+-        'Α': 'A', 'Β': 'B', 'Ο': 'O',
+-        'Ｈ': 'H', 'ｅ': 'e', 'ｏ': 'o',
+-        'ⅰ': 'i', 'ⅱ': 'ii', 'ⅲ': 'iii',
+-    }
+-    text = ''.join(c if c not in CONFUSABLES else CONFUSABLES[c] for c in text)
+-
+-    # Replace common smart punctuation
+-    REPLACEMENTS = {
+-        '\u201C': '"', '\u201D': '"',
+-        '\u2018': "'", '\u2019': "'",
+-        '\u2013': '-', '\u2014': '-', '\u2212': '-',
+-        '\u2026': '...',
+-        '\u2010': '-', '\u2011': '-',
+-        '\uFE63': '-', '\u2043': '-', '\uFF0D': '-',
+-    }
+-    for orig, repl in REPLACEMENTS.items():
+-        if orig in text:
+-            text = text.replace(orig, repl)
+-
+-    # Strip Backslash Escapes (HTML-to-MD converter artifacts)
+-    text = re.sub(r'\\([\\`*_{}[\]()#+\-.!<>])', r'\1', text)
+-
+-    # ======================================================================
+-    # Phase 2: Inline Structural Repair & Splitting
+-    # ======================================================================
+-    # Split jammed inline headers & bullets (e.g. `**Required Qualifications:** * 6+ years`)
+-    # Restrict to horizontal whitespace only ([^\S\n]) to prevent swallowing newlines.
+-    text = re.sub(r'(?m)^[^\S\n]*\*\*([^*:\n]+):\*\*[^\S\n]*[\*\-\+][^\S\n]+', r'\1:\n- ', text)
+-
+-    # Split escaped asterisk jam (e.g. `What You'll Accomplish\* Lead, coach...`)
+-    # - Uses [ \t] instead of \s to strictly prevent matching across newlines.
+-    # - Expanded character set to allow common header punctuation (- & ( ) ,).
+-    # - Negative lookbehind (?<![ \t]) ensures no space immediately precedes the asterisk.
+-    text = re.sub(r'(?m)^([A-Za-z][A-Za-z0-9 \t/\'\-&(),]{2,45}?)(?<![ \t])\*[^\S\n]+(.*)', r'\1:\n- \2', text)
+-
+-    # Split bold paragraph jam (e.g. `Additional Information**Applicants must...`)
+-    # - Same rules apply as above to protect mid-sentence bolding.
+-    text = re.sub(r'(?m)^([A-Za-z][A-Za-z0-9 \t/\'\-&(),]{2,45}?)(?<![ \t])\*\*(.*?)(?:\*\*)?[^\S\n]*$', r'\1:\n\2', text)
+-
+-    # Normalize bullet-like characters (•, ►, ▪, etc. -> - )
+-    BULLETS = "•‣▪●◦·‒—–→►⁃∙⋅⦿☉⦾"
+-    pattern = f"[{re.escape(BULLETS)}][\u00A0\u2000-\u200B\\s]*"
+-    text, _ = re.subn(pattern, "- ", text)
+-
+-    # ======================================================================
+-    # Phase 3: Comprehensive Pseudo-Header Detection & Dynamic Depth
+-    # ======================================================================
+-    # Unified single pass: detect pseudo-headers and assign header depth
+-    # relative to the last-seen real header level.
+-    lines = text.splitlines()
+-    modified_lines = lines.copy()
+-    current_header_level = 2  # Default: job descriptions live under H2
+-
+-    for i, line in enumerate(lines):
+-        stripped = line.strip()
+-        if not stripped:
+-            continue
+-
+-        # Normalize disjointed header hashes (e.g., "# # #" -> "###")
+-        # We do this before the real header match so they are correctly identified.
+-        if stripped.startswith('#'):
+-            prefix_match = re.match(r'^([#\s]+)(.*)', stripped)
+-            if prefix_match:
+-                prefix = prefix_match.group(1)
+-                hash_count = prefix.count('#')
+-                if 1 <= hash_count <= 6:
+-                    stripped = f"{'#' * hash_count} {prefix_match.group(2).strip()}"
+-
+-        # Track existing Markdown headers to maintain depth context and strip bold formatting
+-        header_match = re.match(r'^(#{1,6})\s+(.*)', stripped)
+-        if header_match:
+-            current_header_level = len(header_match.group(1))
+-            clean_title = _strip_formatting(header_match.group(2))
+-            modified_lines[i] = f"{'#' * current_header_level} {clean_title}"
+-            continue
+-
+-        above_blank = (i == 0) or (lines[i - 1].strip() == "")
+-
+-        if _is_pseudo_header(line, above_blank, lines, i):
+-            clean = _strip_formatting(stripped)
+-            # Strip trailing colon from the title text (the header itself implies a section)
+-            if clean.endswith(':'):
+-                clean = clean[:-1].strip()
+-            # Assign depth: one level below the last-seen real header, capped at H4
+-            target_level = min(current_header_level + 1, 4)
+-            # If not preceded by a blank line, isolate with a leading newline
+-            prefix = "\n" if not above_blank else ""
+-            modified_lines[i] = f"{prefix}{'#' * target_level} {clean}"
+-
+-    text = "\n".join(modified_lines)
+-
+-    # ======================================================================
+-    # Phase 4: List Marker & Content Normalization
+-    # ======================================================================
+-    if STANDARDIZE_BULLET_LISTS:
+-        text, _ = re.subn(r'(?m)^([ \t]*)[*+]\s+', r'\1- ', text)
+-
+-    list_marker_pattern = r'(?m)^([ \t]*(?:[-*+]|\d+\.)\s+)'
+-    
+-    # Strip bold from LLM-style inline prefixes (e.g. "**Title:**" or "- **Title:**" or "-**Title:**")
+-    llm_prefix_pat = re.compile(r'(?m)^([ \t]*(?:[-*+]\s*)?)\*\*\s*([^\*]+?)\s*(?::\*\*|\*\*:\s*)(.*)')
+-    text, _ = llm_prefix_pat.subn(r'\1\2: \3', text)
+-
+-    # Collapse loose list items (remove blank lines between list items so mdformat keeps them tight)
+-    text = re.sub(r'(?m)(^[ \t]*[-*+]\s+[^\n]+)\n+[ \t]*\n(?=[ \t]*[-*+]\s+)', r'\1\n', text)
+-
+-
+-    if REMOVE_BOLD_FROM_LISTS:
+-        bold_pat = re.compile(list_marker_pattern + r'\*\*(.+?)\*\*(.*)')
+-        text, _ = bold_pat.subn(r'\1\2\3', text)
+-
+-    if REMOVE_ITALIC_FROM_LISTS:
+-        italic_pat = re.compile(list_marker_pattern + r'[*_](?![*_])(.+?)(?<![*_])[*_](.*)')
+-        text, _ = italic_pat.subn(r'\1\2\3', text)
+-
+-    # ======================================================================
+-    # Phase 5: Header Hierarchy Re-Indexing
+-    # ======================================================================
+-    # Ensure headers form a valid, incrementally descending tree.
+-    # Walk through all headers and re-index any that skip levels.
+-    lines = text.splitlines()
+-    modified_lines = lines.copy()
+-    last_level = 0  # No header seen yet
+-
+-    for i, line in enumerate(lines):
+-        m = re.match(r'^(#{1,6})\s+(.*)', line)
+-        if m:
+-            level = len(m.group(1))
+-            title = m.group(2)
+-            if last_level == 0:
+-                # First header in document — accept as-is
+-                last_level = level
+-            elif level > last_level + 1:
+-                # Header skips levels (e.g. ## followed by ####) — pull it down
+-                level = last_level + 1
+-                modified_lines[i] = f"{'#' * level} {title}"
+-            last_level = level
+-
+-    text = "\n".join(modified_lines)
+-
+-    # Restore code blocks before final filtering passes
+-    text = _restore_code_blocks(text, code_blocks)
+-
+-    # ======================================================================
+-    # Phase 6: Character Filtering & Emoji/Control Strip
+-    # ======================================================================
+-    ALLOWED_NON_ASCII = set("áéíóúüñçãõêâôûìÁÉÍÓÚÜÑÇÃÕÊÂÔÛÌ€£¥©®™")
+-    cleaned = []
+-    for c in text:
+-        cat = unicodedata.category(c)
+-        if c in ('\n', '\t'):
+-            cleaned.append(c)
+-        elif not c.isprintable():
+-            continue
+-        elif cat in ('Cf', 'Cc', 'Cs'):
+-            continue
+-        elif ord(c) <= 127:
+-            cleaned.append(c)
+-        elif c in ALLOWED_NON_ASCII:
+-            cleaned.append(c)
+-    text = ''.join(cleaned)
+-
+-    # Extra Cleanup: Emoji, ZWJ, Formatting Marks
+-    emoji_pattern = re.compile(
+-        '['
+-        '\U0001F000-\U0001FAFF'
+-        '\U00002500-\U00002BEF'
+-        '\U00002702-\U000027B0'
+-        '\U0001F900-\U0001F9FF'
+-        '\U0001F300-\U0001F5FF'
+-        ']+',
+-        flags=re.UNICODE
+-    )
+-    text = emoji_pattern.sub('', text)
+-    text = re.sub(r'[\u200B-\u200D\uFEFF\u202A-\u202E\u2060-\u206F]', '', text)
+-
+-    # Remove Combining Marks
+-    text = ''.join(c for c in text if unicodedata.category(c) != 'Mn')
+-
+-    # Fix Whitespace and Normalize Line Endings
+-    text = text.replace('\r\n', '\n').replace('\r', '\n')
+-    text, _ = re.subn(r'[^\S\r\n\t]{2,}', ' ', text)
+-    text, _ = re.subn(r'\s+([.,;:!?)\]])', r'\1', text)
+-    text, _ = re.subn(r'([\(\[]) +', r'\1', text)
+-
+-    # Force normalize remaining line breaks
+-    text = text.replace('\u2028', '\n').replace('\u2029', '\n')
+-    text = re.sub(r'[\v\f]+', '\n', text)
+-
+-    # ======================================================================
+-    # Phase 7: Standard GFM Formatting Pass (mdformat)
+-    # ======================================================================
+-    result = text
+-    import os
+-    if os.getenv("SANITIZE_MDFORMAT", "true").lower() == "true":
+-        try:
+-            import mdformat
+-            result = mdformat.text(text, extensions={"gfm"})
+-        except Exception as e:
+-            import traceback
+-            # Only write container error logs if actually running inside a Docker container
+-            if os.path.exists("/.dockerenv"):
+-                data_dir = os.getenv("JOB_FERRET_DATA_DIR") or os.getenv("DATA_DIR")
+-                if data_dir and os.path.isdir(data_dir):
+-                    try:
+-                        with open(os.path.join(data_dir, "mdformat_error.log"), "a", encoding="utf-8") as err_f:
+-                            err_f.write(f"Error: {e}\n{traceback.format_exc()}\n")
+-                    except Exception:
+-                        pass
+-
+-    else:
+-        logger.info("mdformat formatting skipped per SANITIZE_MDFORMAT setting.")
+-
+-    result = result.strip()
+-    logger.info(f"sanitize_description FINISHED. Final length: {len(result)}. Difference: {len(result) - original_length}")
+-    
+-    return result
+-
+-
+-if __name__ == "__main__":
+-    import sys
+-    # Standalone CLI entrypoint for local execution, dotfiles, or Apple Shortcuts.
+-    # Automatically silence internal logging in CLI mode so only sanitized markdown reaches stdout.
+-    logger.disabled = True
+-
+-    # Filter out optional silent/logless flags if provided
+-    args = [a for a in sys.argv[1:] if a not in ("-s", "--silent", "--logless")]
+-
+-    if args:
+-        input_text = " ".join(args)
+-    elif not sys.stdin.isatty():
+-        input_text = sys.stdin.read()
+-    else:
+-        print("Usage: pbpaste | python3 sanitize_md.py | pbcopy (or provide text as argument)", file=sys.stderr)
+-        sys.exit(1)
+-
+-    print(sanitize_description(input_text))
+\ No newline at end of file
+diff --git a/src/starship.toml b/src/starship.toml
+index 36c16c6..102b79d 100644
+--- a/src/starship.toml
++++ b/src/starship.toml
+@@ -15,17 +15,17 @@ $character"""
+ 
+ right_format = """$cmd_duration$time"""
+ 
+-add_newline = false
++add_newline = true
+ 
+ [username]
+-show_always = false
++show_always = true
+ format = "[$user]($style)@"
+-style_user = "comment"
++style_user = "foreground"
+ 
+ [hostname]
+-ssh_only = false
++#ssh_only = false
+ format = "[$hostname]($style) "
+-style = "purple"
++style = "bold green"
+ ssh_symbol = ""
+ 
+ [directory]
+@@ -39,11 +39,11 @@ vimcmd_symbol = "[❮](purple)"
+ 
+ [git_branch]
+ format = "[$branch]($style)"
+-style = "bold comment"
++style = "bold purple"
+ 
+ [git_status]
+-format = "[[(*$conflicted$untracked$modified$staged$renamed$deleted)](red) ($ahead_behind$stashed)]($style)"
+-style = "orange"
++format = "[[(*$conflicted$untracked$modified$staged$renamed$deleted)](pink) ($ahead_behind$stashed)]($style)"
++style = "comment"
+ conflicted = ""
+ untracked = ""
+ modified = " "
+@@ -63,7 +63,7 @@ format = "[$duration]($style) "
+ style = "comment"
+ 
+ [time]
+-disabled = true
++disabled = false
+ time_format = "%R:%S"
+ format = "[$time]($style)"
+ style = "bold comment"

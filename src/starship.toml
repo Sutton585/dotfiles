@@ -63,7 +63,7 @@ format = "[$duration]($style) "
 style = "comment"
 
 [time]
-disabled = true
+disabled = false
 time_format = "%R:%S"
 format = "[$time]($style)"
 style = "bold comment"

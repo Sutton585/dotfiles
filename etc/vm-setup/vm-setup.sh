@@ -1,7 +1,7 @@
 #!/bin/bash
 set -euo pipefail
 
-[ "$EUID" -eq 0 ] || { echo "Run with: sudo bash setup.sh"; exit 1; }
+[ "$EUID" -eq 0 ] || { echo "Run with: sudo bash $(basename "$0")"; exit 1; }
 REPO="https://github.com/Sutton585/dotfiles.git"
 
 systemctl enable --now tailscaled
@@ -38,7 +38,7 @@ if [ -z "$CURRENT_IP" ]; then
 
   CURRENT_IP=$(tailscale ip -4 2>/dev/null || true)
   if [ -z "$CURRENT_IP" ]; then
-    echo "Login incomplete or canceled. Please re-run: sudo bash setup.sh"
+    echo "Login incomplete or canceled. Please re-run: sudo bash $(basename "$0")"
     exit 1
   fi
 
@@ -51,7 +51,7 @@ Node Name:   $HOST_NAME
 NEXT STEPS:
 1. Disconnect this current SSH session.
 2. Reconnect over Tailscale using:  ssh admin@$CURRENT_IP
-3. Re-run:  sudo bash setup.sh
+3. Re-run:  sudo bash $(basename "$0")
 ===================================================================
 BANNER
   exit 0
@@ -113,7 +113,15 @@ systemctl reload sshd
 # 3. Lock Down Firewall & Terminate Stale Conntrack Sessions
 # -------------------------------------------------------------------------
 echo "  └─ Firewall: installing tailscale-only ruleset"
-[ -f "/etc/nftables.locked.conf" ] || { echo "ERROR: /etc/nftables.locked.conf not found."; exit 1; }
+if [ ! -f "/etc/nftables.locked.conf" ]; then
+  SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+  if [ -f "$SCRIPT_DIR/nftables.locked.conf" ]; then
+    install -m 600 "$SCRIPT_DIR/nftables.locked.conf" /etc/nftables.locked.conf
+  else
+    echo "ERROR: /etc/nftables.locked.conf not found."
+    exit 1
+  fi
+fi
 
 # Validate syntax before swapping
 nft -c -f /etc/nftables.locked.conf

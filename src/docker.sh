@@ -1,14 +1,17 @@
-# docker ps -m / docker compose ps -m => minimal output; all else passes through
-docker() {
-  if [ "$1" = ps ] && [ "$2" = -m ]; then
-    shift 2
-    command docker ps --format "table {{.Names}}\t{{.Status}}" "$@"
-  elif [ "$1" = compose ] && [ "$2" = ps ] && [ "$3" = -m ]; then
-    shift 3
-    command docker compose ps --format "table {{.Name}}\t{{.Status}}" "$@"
-  else
-    command docker "$@"
-  fi
+.docker() {
+  case "$1" in
+    up)   shift; docker compose --profile '*' up "$@" ;;
+    down) shift; docker compose --profile '*' down "$@" ;;
+    ps)   shift; docker ps --format "table {{.Names}}\t{{.Status}}" "$@" ;;
+    compose)
+      if [ "$2" = "ps" ]; then
+        shift 2
+        docker compose ps --format "table {{.Name}}\t{{.Status}}" "$@"
+      else
+        docker "$@"
+      fi ;;
+    *)    docker "$@" ;;
+  esac
 }
 
 # deploy [-f] [profile...]  (no profile = all; -f = foreground)

@@ -11,7 +11,7 @@ elif [ -n "$BASH_SOURCE" ]; then
   shopt -s globstar nullglob
 fi
 
-# Ensure ~/.local/bin is in PATH for starship, zoxide, fzf
+# Ensure ~/.local/bin is in PATH for items like starship, zoxide, fzf
 [[ ":$PATH:" != *":$HOME/.local/bin:"* ]] && export PATH="$HOME/.local/bin:$PATH"
 
 # 2. Initialize CLI tools (Starship, Zoxide, FZF)

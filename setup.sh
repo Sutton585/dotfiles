@@ -75,10 +75,10 @@ else
 fi
 
 # Clean up legacy Starship symlink (now loaded via STARSHIP_CONFIG in dotfiles.sh)
-if [ -L "$HOME/.config/starship.toml" ]; then
-  rm -f "$HOME/.config/starship.toml"
-  log 1 "└─ legacy cleanup: removed obsolete ~/.config/starship.toml symlink"
-fi
+# if [ -L "$HOME/.config/starship.toml" ]; then
+#   rm -f "$HOME/.config/starship.toml"
+#   log 1 "└─ legacy cleanup: removed obsolete ~/.config/starship.toml symlink"
+# fi
 
 # --- 2. Set up isolated virtualenv for sanitize_md ---
 VENV_DIR="$DOTFILES_DIR/src/sanitize_md/.venv"
